@@ -61,9 +61,11 @@ API with your own key.
 
 ## Requirements
 
-- Windows 10 or 11 for the supplied watchdog and AutoClaw vault access.
-  Dashboard account encryption uses DPAPI on Windows and AES-256-GCM on POSIX;
-  the Node processes themselves are otherwise portable.
+- Windows 10 or 11 for the bundled watchdog and Task Scheduler integration.
+  The lanes and dashboard run on Linux and macOS too; only the Watchdog and
+  AutoClaw auto-launch are Windows-specific. AutoClaw vault decryption supports
+  Windows DPAPI, Linux Secret Service and the macOS Keychain; install the
+  AutoClaw desktop app separately on those systems.
 - Node.js 20 or newer.
 - AutoClaw desktop for vault-backed accounts. Dashboard OAuth accounts do not
   need the desktop app; the `zai` backend does not either.
@@ -621,9 +623,9 @@ The selected backend has no usable credential. Connect an account for
 
 **AutoClaw login is rejected or the vault is empty**
 
-Vault accounts require the same Windows user that owns the AutoClaw DPAPI
-vault. Dashboard OAuth accounts bypass the vault and work without the desktop
-app.
+Vault accounts require access to the AutoClaw vault of the current OS user:
+DPAPI on Windows, Secret Service on Linux, or the login Keychain on macOS.
+Dashboard OAuth accounts bypass the vault and work without the desktop app.
 
 **`429 budget_exceeded`**
 
