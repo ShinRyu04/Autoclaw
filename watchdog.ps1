@@ -7,7 +7,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 
 $base      = 'D:\ToolsAI\glmproxy'
-$cli       = Join-Path $base 'vendor\glmproxy\bin\cli.js'
+$cli       = Join-Path $base 'bin\cli.js'
 $dashboard = Join-Path $base 'dashboard\server.js'
 $autoClaw  = 'D:\Desktop\AutoClaw2\AutoClaw2.exe'
 $log       = Join-Path $base 'logs\watchdog.log'
@@ -59,7 +59,7 @@ try {
     # Akun dashboard punya token sendiri dan tidak butuh aplikasi AutoClaw.
     $activeManaged = ''
     try {
-        $storeUrl = 'file:///' + ($base -replace '\\', '/') + '/vendor/glmproxy/lib/account-store.js'
+        $storeUrl = 'file:///' + ($base -replace '\\', '/') + '/lib/account-store.js'
         $env:GLMP_STORE_MODULE = $storeUrl
         $activeManaged = (& node --input-type=module -e "import(process.env.GLMP_STORE_MODULE).then(m=>process.stdout.write(m.getActiveManagedId()||String()))" 2>$null)
         Remove-Item Env:GLMP_STORE_MODULE -ErrorAction SilentlyContinue

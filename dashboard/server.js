@@ -16,9 +16,9 @@ import { execFile } from "node:child_process";
 
 import {
   configFilePath, keysFilePath, projectRoot, readConfigFile, writeConfigPatch,
-} from "../vendor/glmproxy/lib/runtime-config.js";
-import { getModelCatalog, loadConfig } from "../vendor/glmproxy/lib/core.js";
-import { getAutoClawConfigDirs, extractAutoClawVaultToken, isJwtExpired } from "../vendor/glmproxy/lib/vault.js";
+} from "../lib/runtime-config.js";
+import { getModelCatalog, loadConfig } from "../lib/core.js";
+import { getAutoClawConfigDirs, extractAutoClawVaultToken, isJwtExpired } from "../lib/vault.js";
 import {
   getActiveManagedId,
   getManagedAccount,
@@ -29,9 +29,9 @@ import {
   updateManagedDisplayName,
   updateManagedTokens,
   upsertManagedAccount,
-} from "../vendor/glmproxy/lib/account-store.js";
-import { generateKey, maskKey, readKeys, writeKeys } from "../vendor/glmproxy/lib/keystore.js";
-import * as keyusage from "../vendor/glmproxy/lib/keyusage.js";
+} from "../lib/account-store.js";
+import { generateKey, maskKey, readKeys, writeKeys } from "../lib/keystore.js";
+import * as keyusage from "../lib/keyusage.js";
 
 const ROOT = projectRoot();
 const PUBLIC_DIR = path.join(ROOT, "dashboard", "public");

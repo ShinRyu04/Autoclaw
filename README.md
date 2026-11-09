@@ -19,9 +19,9 @@ AutoClaw credits or the Z.ai API. Two Node.js lanes serve the model traffic,
 and a separate dashboard process handles accounts, client keys, live requests,
 health checks and logs.
 
-The proxy source is vendored under `vendor/glmproxy` (GLMproxy 3.3.x), so
-installing or updating npm packages cannot replace the patched code by
-accident. The dashboard lives in `dashboard/` and talks to the lanes only over
+The proxy source lives at the repository root (`bin/`, `lib/`, `openai.js`,
+`anthropic.js`), based on GLMproxy 3.3.x with the patches required by the
+dashboard. The dashboard lives in `dashboard/` and talks to the lanes only over
 loopback HTTP; it never relays model traffic.
 
 Nothing here bypasses billing. The `autoclaw` backend uses the account the
@@ -413,7 +413,9 @@ dashboard a stale `config.json`.
 
 | Path | Purpose |
 |---|---|
-| `vendor/glmproxy/` | vendored proxy source and CLI |
+| `bin/cli.js` | proxy CLI and launcher |
+| `lib/` | proxy core, queue, governor, vault, accounts and keys |
+| `openai.js`, `anthropic.js` | OpenAI- and Anthropic-compatible lane entrypoints |
 | `dashboard/server.js` | dashboard HTTP server, account store, key API, logs |
 | `dashboard/public/` | dashboard SPA, styles, i18n, OAuth page and artwork |
 | `config.example.json` | runtime configuration example |
@@ -496,8 +498,8 @@ Hard refresh with `Ctrl+F5`. Static assets are served from
 npm run check
 ```
 
-The check runs `node --check` over every vendored module the project patches
-and every dashboard script. There is no compiler and no test suite in this
+The check runs `node --check` over every proxy module and every dashboard
+script. There is no compiler and no test suite in this
 repository; changes to lane behavior should be verified against a live
 AutoClaw or Z.ai account before release.
 
@@ -526,9 +528,9 @@ in place.
 ## Credits
 
 The upstream proxy is [eequaled/GLMproxy](https://github.com/eequaled/GLMproxy),
-MIT licensed. This repository vendors version 3.3.x and adds the operations
-dashboard, bilingual interface, client-key management, account manager,
-watchdog and Windows launch scripts.
+MIT licensed. This repository carries version 3.3.x with local patches and
+adds the operations dashboard, bilingual interface, client-key management,
+account manager, watchdog and Windows launch scripts.
 
 Maintained by [ShinRyu04](https://github.com/ShinRyu04).
 
