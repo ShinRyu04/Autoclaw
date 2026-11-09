@@ -1,8 +1,14 @@
-# AutoClaw / Z.ai Gateway
+<p align="center">
+  <img src="dashboard/public/autoclaw.png" alt="Autoclaw" width="160">
+</p>
 
-<p align="center"><img src="dashboard/public/autoclaw.png" alt="Autoclaw" width="160"></p>
+<h1 align="center">AutoClaw / Z.ai Gateway</h1>
 
-Proxy lokal OpenAI- dan Anthropic-compatible. Dua backend:
+<p align="center">
+  Proxy lokal OpenAI- dan Anthropic-compatible.
+</p>
+
+Dua backend:
 
 - **autoclaw** (default) — memakai credit AutoClaw lewat vault-nya; AutoClaw harus hidup.
 - **zai** — memanggil `api.z.ai` langsung dengan `ZAI_API_KEY`, tanpa vault maupun identity shim AutoClaw.
