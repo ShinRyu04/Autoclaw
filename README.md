@@ -161,9 +161,107 @@ needs the AutoClaw desktop app and its vault on Windows.
 Admin mutations require the operator key. On the dashboard side, every
 mutation also requires `X-Dashboard: 1`.
 
-## Connect a Client
+## Integrations
 
-OpenAI SDK:
+The examples use the default operator key `akuganteng`. Replace it with your
+own `PROXY_KEY` before exposing either port.
+
+### Claude Code CLI and Anthropic API
+
+Add this to `~/.claude/settings.json` (on Windows,
+`%USERPROFILE%\.claude\settings.json`):
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:18792",
+    "ANTHROPIC_AUTH_TOKEN": "akuganteng"
+  }
+}
+```
+
+Or let the proxy write the settings: run `node bin/cli.js`, choose the
+Anthropic surface, then choose **Launch Claude Code with <model>**. The launcher
+writes a settings file into the proxy state directory, passes it through
+`claude --settings` when the client supports it, waits for `/healthz`, and
+hands the terminal to the interactive client. The gateway stays up when Claude
+Code exits. Set `GLMP_CLAUDE_BIN` when `claude` is not on `PATH`.
+
+Claude Agent SDK and direct `/v1/messages` calls support streaming SSE,
+thinking blocks and tool use without restrictions.
+
+Claude Code CLI interactive and print mode work on AutoClaw 2.x through the
+identity guard. Claude Code names itself in its system prompt, and the upstream
+gate rejects foreign harness signatures with a bare `406`; the guard
+(`GLMP_FOREIGN_IDENTITY_GUARD`, on by default) rewrites those phrases before
+forwarding. With the guard off, the unmodified prompt is rejected on 2.x. The
+system quarantine (`GLMP_SYSTEM_QUARANTINE`, on by default) catches that `406`,
+moves the harness text to user scope and retries immediately.
+
+```sh
+claude -p "Explain the codebase architecture"
+```
+
+Anthropic SDK:
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://127.0.0.1:18792",
+    api_key="akuganteng",
+)
+message = client.messages.create(
+    model="zaicoding_glm-5.3",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "hello"}],
+)
+print(message.content[0].text)
+```
+
+### OpenCode
+
+Add a custom provider to the OpenCode configuration:
+
+```json
+{
+  "provider": {
+    "autoclaw": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Autoclaw",
+      "options": {
+        "baseURL": "http://127.0.0.1:18791/v1",
+        "apiKey": "akuganteng"
+      },
+      "models": {
+        "zai_auto": { "name": "Autoclaw Auto" },
+        "zai_auto-fast": { "name": "Autoclaw Auto-Fast" },
+        "zaicoding_glm-5.3": { "name": "Autoclaw GLM-5.3" },
+        "zai_glm-5.3-flash": { "name": "Autoclaw GLM-5.3 Flash" },
+        "zai_glm-5.3-flashx-legal": { "name": "Autoclaw GLM-5.3 FlashX-Legal" }
+      }
+    }
+  }
+}
+```
+
+### Cursor, Continue and other OpenAI-compatible clients
+
+Point the client at `http://127.0.0.1:18791/v1` with the operator or a client
+key. Clients that probe `/v1/models` discover the active catalog automatically.
+
+For a custom model in a UI:
+
+| Field | Value |
+|---|---|
+| API format | OpenAI Chat Completions |
+| URL | `http://127.0.0.1:18791/v1` |
+| Model ID | `zai_auto` or any ID from `GET /v1/models` |
+| API key | `akuganteng` or a client key |
+
+### Python
+
+Streaming with the OpenAI SDK:
 
 ```python
 from openai import OpenAI
@@ -173,6 +271,17 @@ client = OpenAI(
     api_key="akuganteng",
 )
 
+with client.chat.completions.stream(
+    model="zai_auto",
+    messages=[{"role": "user", "content": "Hello!"}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+```
+
+Non-streaming:
+
+```python
 response = client.chat.completions.create(
     model="zaicoding_glm-5.3",
     messages=[{"role": "user", "content": "hello"}],
@@ -180,20 +289,34 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-Anthropic SDK or Claude Code:
+### JavaScript
 
-```sh
-export ANTHROPIC_BASE_URL=http://127.0.0.1:18792
-export ANTHROPIC_AUTH_TOKEN=akuganteng
+```javascript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://127.0.0.1:18791/v1",
+  apiKey:  "akuganteng",
+});
+
+const stream = await client.chat.completions.create({
+  model:    "zai_auto",
+  messages: [{ role: "user", content: "Hello!" }],
+  stream:   true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}
 ```
 
-curl:
+### curl
 
 ```sh
 curl -s http://127.0.0.1:18791/v1/chat/completions \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer akuganteng' \
-  -d '{"model":"zaicoding_glm-5.3","messages":[{"role":"user","content":"ping"}]}'
+  -d '{"model":"zai_auto","messages":[{"role":"user","content":"ping"}]}'
 ```
 
 ### Request headers
