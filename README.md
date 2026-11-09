@@ -2,7 +2,7 @@
   <img src="dashboard/public/autoclaw-readme.png" alt="Autoclaw" width="180">
 </p>
 
-<h1 align="center">AutoClaw / Z.ai Gateway</h1>
+<h1 align="center">Autoclaw</h1>
 
 <p align="center">
   Local OpenAI- and Anthropic-compatible gateway with a bilingual operations dashboard.
@@ -61,9 +61,9 @@ API with your own key.
 
 ## Requirements
 
-- Windows 10 or 11 for the supplied watchdog, Task Scheduler integration,
-  DPAPI encryption and AutoClaw vault access. The Node processes themselves
-  are otherwise portable.
+- Windows 10 or 11 for the supplied watchdog and AutoClaw vault access.
+  Dashboard account encryption uses DPAPI on Windows and AES-256-GCM on POSIX;
+  the Node processes themselves are otherwise portable.
 - Node.js 20 or newer.
 - AutoClaw desktop for vault-backed accounts. Dashboard OAuth accounts do not
   need the desktop app; the `zai` backend does not either.
@@ -118,13 +118,15 @@ npm run start:anthropic
 ```
 
 ```sh
+export PROXY_KEY=choose-a-strong-key
 npm run dashboard
 ```
 
-The default operator key is `akuganteng` when `PROXY_KEY` is unset. Set
-`PROXY_KEY` before exposing any port; the lanes and dashboard read the same
-value. The `autoclaw` backend additionally needs the AutoClaw desktop app and
-its vault on Windows.
+Use the same `PROXY_KEY` in all three terminals. There are no runtime npm
+dependencies, so `npm install` is not required. The default operator key is
+`akuganteng` when `PROXY_KEY` is unset; set it before exposing any port. The
+lanes and dashboard read the same value. The `autoclaw` backend additionally
+needs the AutoClaw desktop app and its vault on Windows.
 
 ## Ports and Endpoints
 
@@ -413,10 +415,12 @@ start-proxy.cmd
 cscript //nologo start-proxy-hidden.vbs
 ```
 
-The watchdog task is `Autoclaw-Watchdog`, scheduled every two minutes. Its
+The watchdog can be run on demand with either launcher. This checkout also
+registers it as the `Autoclaw-Watchdog` scheduled task every two minutes. Its
 action starts AutoClaw when the `autoclaw` backend needs it, then starts any
 missing process on ports `18791`, `18792` and `18793`. Logs go to
-`logs/watchdog.log`.
+`logs/watchdog.log`. The task is optional; the launchers work from any
+checkout path.
 
 Manual control:
 
