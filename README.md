@@ -583,7 +583,6 @@ dashboard a stale `config.json`.
 | `start-openai.cmd`, `start-anthropic.cmd` | single-lane launchers |
 | `run-ps-hidden.vbs` | hidden PowerShell launcher used by the watchdog |
 | `tests/` | upstream unit, pen-test, vault, secret-service and queue suites |
-| `screenshots/` | upstream proxy screenshots |
 | `.github/workflows/` | CI and release workflows |
 | `BAN-RISK-AND-LIMITS.md` | upstream account-risk notes, read before heavy use |
 
