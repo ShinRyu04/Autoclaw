@@ -75,12 +75,24 @@ API with your own key.
 git clone https://github.com/ShinRyu04/Autoclaw.git
 cd Autoclaw
 npm run check
+copy config.example.json config.json
+```
+
+A fresh clone has no `config.json`, `keys.json`, or logs. Edit `config.json`
+for your backend, then set a private operator key:
+
+```cmd
+set GLMP_BACKEND=zai
+set ZAI_API_KEY=your-zai-key
+set PROXY_KEY=choose-a-strong-key
 npm start
 ```
 
-`npm start` runs `watchdog.ps1`. On the autoclaw backend it starts AutoClaw if
-needed, then fills any missing lane or dashboard port. Open
-`http://127.0.0.1:18793` for the dashboard.
+`npm start` runs `watchdog.ps1`. On the `zai` backend it does not need
+AutoClaw. On the `autoclaw` backend it starts AutoClaw when the executable is
+available (set `AUTOCLAW_EXE` if it is not at the default path), then fills any
+missing lane or dashboard port. Open `http://127.0.0.1:18793` for the
+dashboard.
 
 For a windowed launcher, run `start-proxy.cmd`. For a hidden launcher, run:
 
@@ -88,17 +100,31 @@ For a windowed launcher, run `start-proxy.cmd`. For a hidden launcher, run:
 cscript //nologo start-proxy-hidden.vbs
 ```
 
-To run the pieces in the foreground:
+The watchdog is Windows-only. On macOS, Linux, or a manual Windows setup, run
+the three processes in separate terminals:
 
-```cmd
+```sh
+export GLMP_BACKEND=zai
+export ZAI_API_KEY=your-zai-key
+export PROXY_KEY=choose-a-strong-key
 npm run start:openai
+```
+
+```sh
+export GLMP_BACKEND=zai
+export ZAI_API_KEY=your-zai-key
+export PROXY_KEY=choose-a-strong-key
 npm run start:anthropic
+```
+
+```sh
 npm run dashboard
 ```
 
-The default operator key is `akuganteng`. Change `PROXY_KEY` in the
-environment or `config.json` before exposing any port, and apply the same key
-to all three processes.
+The default operator key is `akuganteng` when `PROXY_KEY` is unset. Set
+`PROXY_KEY` before exposing any port; the lanes and dashboard read the same
+value. The `autoclaw` backend additionally needs the AutoClaw desktop app and
+its vault on Windows.
 
 ## Ports and Endpoints
 
@@ -298,6 +324,7 @@ Restart-only fields:
 | `GLMP_HOME` | repository root | project root override |
 | `GLMP_STATE_DIR` / `PROXY_STATE_DIR` | `proxy-state/` or the AutoClaw state directory | runtime state location |
 | `OPENCLAW_STATE_DIR` | `%USERPROFILE%\.openclaw-autoclaw` | AutoClaw application state directory |
+| `AUTOCLAW_EXE` | `D:\Desktop\AutoClaw2\AutoClaw2.exe` | watchdog path to the AutoClaw desktop executable |
 | `DASHBOARD_HOST` | `127.0.0.1` | dashboard bind address |
 | `DASHBOARD_PORT` | `18793` | dashboard port |
 | `OPENAI_PORT` | `18791` | dashboard health target for the OpenAI lane |

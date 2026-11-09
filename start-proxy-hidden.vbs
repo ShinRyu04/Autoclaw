@@ -4,5 +4,7 @@
 ' Ini juga yang dipanggil Scheduled Task "Autoclaw-Watchdog".
 
 Set shell = CreateObject("WScript.Shell")
-cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""D:\ToolsAI\glmproxy\watchdog.ps1"" "
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptPath = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), "watchdog.ps1")
+cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & scriptPath & """"
 shell.Run cmd, 0, False

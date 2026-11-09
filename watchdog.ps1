@@ -6,10 +6,10 @@
 
 $ErrorActionPreference = 'SilentlyContinue'
 
-$base      = 'D:\ToolsAI\glmproxy'
+$base      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cli       = Join-Path $base 'bin\cli.js'
 $dashboard = Join-Path $base 'dashboard\server.js'
-$autoClaw  = 'D:\Desktop\AutoClaw2\AutoClaw2.exe'
+$autoClaw  = if ($env:AUTOCLAW_EXE) { $env:AUTOCLAW_EXE } else { 'D:\Desktop\AutoClaw2\AutoClaw2.exe' }
 $log       = Join-Path $base 'logs\watchdog.log'
 
 # A stale shell variable must never redirect this copy to another install.
@@ -38,7 +38,7 @@ try {
     # config.json / dashboard benar-benar berlaku. Default core: 300 req/jam,
     # gap 250 ms; config.json di repo ini menaikkan timeout ke 300 detik.
     $env:GLMP_IDENTITY_VERSION = '2.0.3'
-    $env:PROXY_KEY             = 'akuganteng'
+    if (-not $env:PROXY_KEY) { $env:PROXY_KEY = 'akuganteng' }
 
     # Backend efektif: env > config.json > ZAI_API_KEY > autoclaw.
     $backend = $env:GLMP_BACKEND
@@ -79,8 +79,8 @@ try {
 
     # --- 2. Proses: cek port, nyalakan yang mati saja ---
     $targets = @(
-        @{ Port = 18791; Line = "node `"$cli`" --openai --port 18791 --key akuganteng"; File = 'openai.log' },
-        @{ Port = 18792; Line = "node `"$cli`" --anthropic --port 18792 --key akuganteng"; File = 'anthropic.log' },
+        @{ Port = 18791; Line = "node `"$cli`" --openai --port 18791"; File = 'openai.log' },
+        @{ Port = 18792; Line = "node `"$cli`" --anthropic --port 18792"; File = 'anthropic.log' },
         @{ Port = 18793; Line = "node `"$dashboard`""; File = 'dashboard.log' }
     )
 
