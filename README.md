@@ -5,144 +5,313 @@
 <h1 align="center">AutoClaw / Z.ai Gateway</h1>
 
 <p align="center">
-  Proxy lokal OpenAI- dan Anthropic-compatible.
+  Local OpenAI- and Anthropic-compatible gateway with a bilingual operations dashboard.
 </p>
 
-Dua backend:
+<p align="center">
+  <a href="https://github.com/ShinRyu04/Autoclaw/releases/latest"><img src="https://img.shields.io/github/v/release/ShinRyu04/Autoclaw?label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D20-informational" alt="Node.js 20 or newer"></a>
+</p>
 
-- **autoclaw** (default) — memakai credit AutoClaw lewat vault-nya; AutoClaw harus hidup.
-- **zai** — memanggil `api.z.ai` langsung dengan `ZAI_API_KEY`, tanpa vault maupun identity shim AutoClaw.
+Autoclaw puts a stable OpenAI- and Anthropic-compatible HTTP face in front of
+AutoClaw credits or the Z.ai API. Two Node.js lanes serve the model traffic,
+and a separate dashboard process handles accounts, client keys, live requests,
+health checks and logs.
 
-Source proxy di-vendor di `vendor/glmproxy` supaya aman dari `npm install` dan bisa
-dipatch. Dashboard operasi berjalan terpisah di `dashboard/`.
+The proxy source is vendored under `vendor/glmproxy` (GLMproxy 3.3.x), so
+installing or updating npm packages cannot replace the patched code by
+accident. The dashboard lives in `dashboard/` and talks to the lanes only over
+loopback HTTP; it never relays model traffic.
 
-## Arsitektur
+Nothing here bypasses billing. The `autoclaw` backend uses the account the
+AutoClaw desktop app already owns. The `zai` backend calls the public Z.ai
+API with your own key.
 
-```
-klien (opencode/omp) ──► 127.0.0.1:18791  OpenAI    ┐
-                     ──► 127.0.0.1:18792  Anthropic ┤─► AutoClaw / Z.ai
-dashboard 127.0.0.1:18793 ── baca /status, tulis config.json + keys.json
-```
+## Features
 
-- Antrean dan governor berjalan **per proses**. Dua lane memakai akun AutoClaw
-  yang dipilih di dashboard, jadi budget 300 request/jam efektif berlaku untuk
-  gabungan keduanya.
-- Dashboard hanya membaca state lewat `/status`; ia tidak meneruskan traffic model.
+- **Two backends** — `autoclaw` reads AutoClaw vault or dashboard OAuth
+  credentials; `zai` calls `api.z.ai` directly with `ZAI_API_KEY`.
+- **Two wire formats** — `POST /v1/chat/completions` on port `18791` and
+  `POST /v1/messages` on port `18792`, plus `/v1/models`, `/status`, `/stats`
+  and `/healthz`.
+- **Shared account governor** — one active AutoClaw generation at a time,
+  300 requests/hour by default, a 250 ms minimum dispatch gap, and persisted
+  window state across restarts.
+- **Queue priorities** — `interactive`, `normal` and `background`, FIFO inside
+  each priority, with depth and wait limits.
+- **Per-key quotas** — client keys can pin a model, cap requests per sliding
+  hour, be disabled, reset or deleted. The operator key is never metered as a
+  client key.
+- **Operations dashboard** — overview, accounts, keys, request stream,
+  upstream capacity, account health, model/API reference, settings and logs.
+  A compact ID/EN switch translates labels, dynamic status text, native
+  dialogs and number/date formats; the choice is stored per browser.
+- **Account manager** — dashboard accounts from Z.ai OAuth (Aliyun captcha) and
+  vault accounts backed by AutoClaw credentials, with credits, active-account
+  selection, rename, delete, check-in and token refresh.
+- **Runtime settings** — most limits are written to `config.json` and reloaded
+  into both lanes through `/admin/reload`; the dashboard does this without a
+  restart.
+- **Operational hardening** — dashboard mutations require `X-Dashboard: 1`,
+  responses use a strict CSP, secrets are masked, and a Windows watchdog keeps
+  AutoClaw and all three ports alive.
+- **No build step** — plain Node.js ESM and static HTML/CSS/JS. `npm run check`
+  syntax-checks every patched file.
 
-## Start / Stop
+## Requirements
+
+- Windows 10 or 11 for the supplied watchdog, Task Scheduler integration,
+  DPAPI encryption and AutoClaw vault access. The Node processes themselves
+  are otherwise portable.
+- Node.js 20 or newer.
+- AutoClaw desktop for vault-backed accounts. Dashboard OAuth accounts do not
+  need the desktop app; the `zai` backend does not either.
+- A `ZAI_API_KEY` when using the `zai` backend.
+
+## Quick Start
 
 ```cmd
-:: pastikan semua hidup (AutoClaw bila perlu, 18791, 18792, 18793)
-cscript //nologo D:\ToolsAI\glmproxy\start-proxy-hidden.vbs
-:: atau versi berjendela
-D:\ToolsAI\glmproxy\start-proxy.cmd
+git clone https://github.com/ShinRyu04/Autoclaw.git
+cd Autoclaw
+npm run check
+npm start
 ```
 
-```powershell
-# status watchdog
-Get-ScheduledTask -TaskName 'Autoclaw-Watchdog' | Select TaskName,State
-Start-ScheduledTask -TaskName 'Autoclaw-Watchdog'
+`npm start` runs `watchdog.ps1`. On the autoclaw backend it starts AutoClaw if
+needed, then fills any missing lane or dashboard port. Open
+`http://127.0.0.1:18793` for the dashboard.
 
-# stop (proxy + dashboard saja, node lain jangan ikut)
-Get-NetTCPConnection -LocalPort 18791,18792,18793 -State Listen |
-  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
-```
-
-Scheduled Task **`Autoclaw-Watchdog`** jalan tiap 2 menit: menyalakan AutoClaw
-(hanya bila backend `autoclaw`), lalu mengisi port yang mati. Log: `logs\watchdog.log`.
-
-Script npm:
+For a windowed launcher, run `start-proxy.cmd`. For a hidden launcher, run:
 
 ```cmd
-npm start              :: watchdog
-npm run start:openai   :: hanya lane OpenAI (foreground)
+cscript //nologo start-proxy-hidden.vbs
+```
+
+To run the pieces in the foreground:
+
+```cmd
+npm run start:openai
 npm run start:anthropic
-npm run dashboard      :: dashboard di 18793
-npm run check          :: syntax check semua file yang dipatch
+npm run dashboard
 ```
 
-## Endpoint + Key
+The default operator key is `akuganteng`. Change `PROXY_KEY` in the
+environment or `config.json` before exposing any port, and apply the same key
+to all three processes.
 
-| Format | URL | Key |
+## Ports and Endpoints
+
+| Service | URL | Credential |
 |---|---|---|
-| OpenAI (`/v1/chat/completions`) | `http://127.0.0.1:18791/v1` | `akuganteng` (operator) |
-| Anthropic (`/v1/messages`) | `http://127.0.0.1:18792` | `akuganteng` (operator) |
-| Dashboard | `http://127.0.0.1:18793` | loopback, tanpa login |
-| Status OpenAI | `http://127.0.0.1:18791/status` | operator |
-| Stats per key | `http://127.0.0.1:18791/stats` | key klien itu sendiri |
+| OpenAI lane | `http://127.0.0.1:18791/v1` | operator or client key |
+| Anthropic lane | `http://127.0.0.1:18792` | operator or client key |
+| Dashboard | `http://127.0.0.1:18793` | loopback only, no login |
+| OpenAI status | `http://127.0.0.1:18791/status` | operator key |
+| Per-key stats | `http://127.0.0.1:18791/stats` | that client key |
+| Health | `http://127.0.0.1:18791/healthz` | operator or client key |
 
-`PROXY_KEY` = kunci operator: selalu diterima dan **tidak** terkena kuota per key
-(governor akun tetap berlaku). Kunci klien ada di `keys.json`.
+### Model routes
 
-`/healthz` juga memerlukan key (middleware auth berlaku untuk semua route).
-
-### Header tambahan
-
-| Header | Nilai | Efek |
+| Route | Dialect | Notes |
 |---|---|---|
-| `X-Queue-Priority` | `interactive`, `normal` (default), `background` | request `interactive` menyalip antrean `background`/`normal` |
-| `Authorization` | `Bearer <key>` | operator atau kunci klien |
-| `x-api-key` | `<key>` | alternatif untuk Anthropic |
+| `POST /v1/chat/completions` | OpenAI | streaming and non-streaming, tools, model mapping |
+| `POST /v1/messages` | Anthropic | streaming and non-streaming, tools, system blocks |
+| `GET /v1/models` | both | active model catalog for the current backend |
+| `GET /status` | — | full runtime snapshot; secrets masked |
+| `GET /stats` | — | usage for the calling key: window, limit, totals, tokens, last status |
+| `GET /healthz` | — | credential and lane health |
 
-### Route admin
+### Admin routes
 
-| Route | Keterangan |
+| Route | Method | Purpose |
+|---|---|---|
+| `/admin/reload` | `POST` | re-read `config.json` and `keys.json` in both lanes |
+| `/status` | `GET` | operator-only status snapshot |
+| `/stats` | `GET` | caller-scoped quota and usage |
+
+Admin mutations require the operator key. On the dashboard side, every
+mutation also requires `X-Dashboard: 1`.
+
+## Connect a Client
+
+OpenAI SDK:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:18791/v1",
+    api_key="akuganteng",
+)
+
+response = client.chat.completions.create(
+    model="zaicoding_glm-5.3",
+    messages=[{"role": "user", "content": "hello"}],
+)
+print(response.choices[0].message.content)
+```
+
+Anthropic SDK or Claude Code:
+
+```sh
+export ANTHROPIC_BASE_URL=http://127.0.0.1:18792
+export ANTHROPIC_AUTH_TOKEN=akuganteng
+```
+
+curl:
+
+```sh
+curl -s http://127.0.0.1:18791/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer akuganteng' \
+  -d '{"model":"zaicoding_glm-5.3","messages":[{"role":"user","content":"ping"}]}'
+```
+
+### Request headers
+
+| Header | Value | Effect |
+|---|---|---|
+| `Authorization` | `Bearer <key>` | operator or client key |
+| `x-api-key` | `<key>` | Anthropic-style alternative |
+| `X-Queue-Priority` | `interactive`, `normal`, `background` | interactive bypasses background and normal work |
+
+The operator key is accepted on every inference route and does not consume a
+client-key quota. Client keys are created in the dashboard and stored in
+`keys.json`.
+
+## Dashboard
+
+`http://127.0.0.1:18793` is loopback-only by default. `DASHBOARD_HOST` can
+change the bind address, but do not expose it to a LAN without your own
+authentication layer.
+
+| Page | What it shows |
 |---|---|
-| `GET /status` | snapshot lengkap; token/secret disamarkan, daftar kunci hanya untuk operator |
-| `GET /stats` | pemakaian key pemanggil: window, limit, total, token, status terakhir |
-| `POST /admin/reload` | baca ulang `config.json` tanpa restart (operator) |
+| Overview | account, point, request, token and cost totals; recent requests; key-quota pressure |
+| Accounts | OAuth and vault accounts, credits, active account, rename, delete, check-in, copy ID |
+| Keys | per-key quota, model pin, usage, enable/disable, reset and delete |
+| Requests | both lanes, outcome strip, filters for success, rate limit and error |
+| Upstream | governor capacity, effective limits and lane state |
+| Health | token and credit checks across every AutoClaw account |
+| API docs | base URLs, endpoints, headers and the active model catalog |
+| Settings | runtime fields written to `config.json`, then reloaded into both lanes |
+| Logs | tails from `logs/`, with follow mode |
 
-### Dashboard
+The sidebar language switch toggles Indonesian and English. Labels, dynamic
+status messages, prompts, confirms, dates and numbers follow the selected
+language. Model IDs, key values and log bodies are never translated.
 
-Menu **Upstream** memuat kapasitas governor dan status kedua jalur. **Health**
-menguji token dan saldo semua akun AutoClaw. **Dokumentasi API** menampilkan base
-URL, endpoint, dan katalog model aktif.
+Dashboard APIs:
 
-**Tambah akun** hanya memakai **Login dengan Z.ai**. Login Z.ai membuka halaman
-captcha Aliyun, meminta URL OAuth bertanda tangan ke AutoClaw, lalu menangkap
-callback di salah satu port loopback resmi (`18432`, `19654`, `19723`, `53699`).
-Token hasil tukar kode disimpan terenkripsi di
-`proxy-state/managed-accounts.enc`; browser tidak pernah menerima token.
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/status` | `GET` | dashboard summary and lane snapshots |
+| `/api/docs` | `GET` | API documentation payload |
+| `/api/health` | `GET` | cached account health |
+| `/api/health/run` | `POST` | run a fresh account health check |
+| `/api/accounts` | `GET` | dashboard and vault accounts with credits |
+| `/api/accounts/active` | `POST` | select the active account |
+| `/api/accounts/checkin` | `POST` | check in every account |
+| `/api/accounts/m_<id>` | `PATCH`, `DELETE` | rename or remove a dashboard account |
+| `/api/keys` | `GET`, `POST` | list or create client keys |
+| `/api/keys/:id` | `PATCH`, `DELETE` | edit or delete a key |
+| `/api/keys/:id/reset` | `POST` | reset one key's usage |
+| `/api/config` | `GET`, `PUT` | read or patch runtime settings |
+| `/api/logs?name=&lines=` | `GET` | tail a log file |
+| `/api/oauth/zai/config` | `GET` | OAuth/captcha configuration |
+| `/api/oauth/zai/start` | `POST` | start a Z.ai OAuth login |
 
-## config.json
+## Backends
 
-Semua setting bisa lewat environment (menang) atau `config.json`. File ditulis
-dashboard secara atomik lalu di-reload ke kedua lane. Contoh lengkap:
-`config.example.json`. Field yang bisa diubah saat runtime:
+### autoclaw
 
-`GLMP_BACKEND`, `ZAI_API_KEY`, `ZAI_BASE_URL`, `ZAI_DEFAULT_MODEL`,
-`ZAI_MODEL_OPUS`, `ZAI_MODEL_SONNET`, `ZAI_MODEL_HAIKU`,
-`BUDGET_REQUESTS_PER_HOUR`, `MIN_GAP_MS`, `GLMP_QUEUE_MAX_DEPTH`,
-`GLMP_QUEUE_WAIT_MS`, `MAX_MESSAGES`, `UPSTREAM_TIMEOUT_MS`,
-`GLMP_THROTTLE_RETRIES`, `GLMP_THROTTLE_RETRY_MS`, `HEARTBEAT_INTERVAL_MS`,
-`GLMP_KEY_WINDOW_HOURS`, `GLMP_AUTOCLAW_ACCOUNT`. `GLMP_AUTOCLAW_ACCOUNT` berisi
-nama folder akun di vault AutoClaw; kosong berarti memakai vault terbaru.
+The default. The lane reads credentials from the AutoClaw vault or from an
+account connected through the dashboard. The selected account is shared by
+both lanes, so the hourly account budget covers the sum of their traffic.
 
-Butuh restart: `PORT`, `HOST`, `UPSTREAM_HOST`, `UPSTREAM_PORT`, `PROXY_KEY`.
+Set a specific vault account with `GLMP_AUTOCLAW_ACCOUNT`; an empty value uses
+the newest vault. Selecting a dashboard account clears the vault selection;
+selecting a vault account clears the dashboard selection.
 
-Nama environment asli yang dipakai kode: `GLMP_MIN_GAP_MS` dibaca sebagai
-`MIN_GAP_MS`, `GLMP_THROTTLE_RETRIES` → `THROTTLE_RETRIES`, dst. `config.json`
-memakai nama environment agar konsisten dengan dokumentasi lama.
+### zai
 
-## Backend Z.ai
+Direct Z.ai API access, with no vault, no AutoClaw identity shim and no
+desktop app requirement:
 
 ```powershell
 $env:GLMP_BACKEND = 'zai'
 $env:ZAI_API_KEY  = '...'
 ```
 
-- `ZAI_API_KEY` saja (tanpa `GLMP_BACKEND`) otomatis memilih backend `zai`.
-- `GLMP_BACKEND=autoclaw` memaksa AutoClaw walau `ZAI_API_KEY` terisi.
-- Pada backend `zai`, watcher token/identity/shape AutoClaw dan prompt shaping
-  dilewati. `ZAI_BASE_URL` default `https://api.z.ai/api/paas/v4/chat/completions`.
-- Tanpa key: `/healthz` = `no_token`, request model = `503 no_api_key`
-  (bukan crash).
-- Pemetaan tier Anthropic: `ZAI_MODEL_OPUS`, `ZAI_MODEL_SONNET` (default
-  `zaicoding_glm-5.3`), `ZAI_MODEL_HAIKU` (default `zai_glm-5.3-flash`).
+- Setting `ZAI_API_KEY` without `GLMP_BACKEND` selects the `zai` backend.
+- `GLMP_BACKEND=autoclaw` forces AutoClaw even when a Z.ai key exists.
+- Without a key, `/healthz` returns `no_token` and model requests return
+  `503 no_api_key`.
+- Anthropic tiers map through `ZAI_MODEL_OPUS`, `ZAI_MODEL_SONNET`
+  (default `zaicoding_glm-5.3`) and `ZAI_MODEL_HAIKU`
+  (default `zai_glm-5.3-flash`).
+- `ZAI_BASE_URL` defaults to
+  `https://api.z.ai/api/paas/v4/chat/completions`.
 
-## Kunci klien + kuota
+## Configuration
 
-`keys.json` (dibuat/diubah lewat dashboard):
+Settings resolve from the environment first, then `config.json`. The dashboard
+writes atomic updates to `config.json` and reloads both lanes. A full example
+is in `config.example.json`.
+
+Runtime fields:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GLMP_BACKEND` | `autoclaw` | backend selection: `autoclaw` or `zai` |
+| `ZAI_API_KEY` | empty | Z.ai API credential |
+| `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4/chat/completions` | Z.ai chat endpoint |
+| `ZAI_DEFAULT_MODEL` | `zaicoding_glm-5.3` | default model for the zai backend |
+| `ZAI_MODEL_OPUS` | `zaicoding_glm-5.3` | Anthropic opus-tier mapping |
+| `ZAI_MODEL_SONNET` | `zaicoding_glm-5.3` | Anthropic sonnet-tier mapping |
+| `ZAI_MODEL_HAIKU` | `zai_glm-5.3-flash` | Anthropic haiku-tier mapping |
+| `BUDGET_REQUESTS_PER_HOUR` | `300` | account budget; `0` disables pacing |
+| `MIN_GAP_MS` / `GLMP_MIN_GAP_MS` | `250` | minimum gap between upstream dispatches |
+| `GLMP_QUEUE_MAX_DEPTH` | `50` | queue depth before `429 queue_overflow` |
+| `GLMP_QUEUE_WAIT_MS` | `0` | maximum queue wait; `0` means no limit |
+| `MAX_MESSAGES` | `0` | message cap per request; `0` means unlimited |
+| `UPSTREAM_TIMEOUT_MS` | `300000` in this repo | per-attempt upstream deadline |
+| `GLMP_THROTTLE_RETRIES` | `3` | in-request retries for upstream throttles |
+| `GLMP_THROTTLE_RETRY_MS` | `4000` | base retry delay, jittered and increased per attempt |
+| `HEARTBEAT_INTERVAL_MS` | `300000` | companion traffic cadence; `0` disables |
+| `GLMP_KEY_WINDOW_HOURS` | `1` | sliding window for per-key quotas |
+| `GLMP_AUTOCLAW_ACCOUNT` | empty | vault account directory name; empty uses the newest |
+
+Restart-only fields:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | per lane | lane listen port |
+| `HOST` | `127.0.0.1` | lane bind address |
+| `PROXY_KEY` | `akuganteng` | operator key |
+| `UPSTREAM_HOST` | `autoglm-api.autoglm.ai` | upstream host |
+| `UPSTREAM_PORT` | `443` | upstream port |
+| `GLMP_IDENTITY_VERSION` | `2.0.3` | pinned AutoClaw identity version |
+| `GLMP_CONFIG_PATH` | `<root>/config.json` | config file path |
+| `GLMP_KEYS_FILE` | `<root>/keys.json` | client key file path |
+| `GLMP_HOME` | repository root | project root override |
+| `GLMP_STATE_DIR` / `PROXY_STATE_DIR` | `proxy-state/` or the AutoClaw state directory | runtime state location |
+| `OPENCLAW_STATE_DIR` | `%USERPROFILE%\.openclaw-autoclaw` | AutoClaw application state directory |
+| `DASHBOARD_HOST` | `127.0.0.1` | dashboard bind address |
+| `DASHBOARD_PORT` | `18793` | dashboard port |
+| `OPENAI_PORT` | `18791` | dashboard health target for the OpenAI lane |
+| `ANTHROPIC_PORT` | `18792` | dashboard health target for the Anthropic lane |
+
+Advanced vendor fields such as `GLMP_QUEUE=0`, `GOVERNOR_PERSIST=0`,
+`PROMPT_ENVELOPE_KB`, `TOOL_SHAPE_BLOCKLIST`,
+`GLMP_FOREIGN_IDENTITY_GUARD=0` and `GLMP_SYSTEM_QUARANTINE=0` are read from
+the environment. Leave them at defaults unless you are diagnosing upstream
+shape or pacing behavior.
+
+## Client Keys and Quotas
+
+Client keys are created in the dashboard and stored in `keys.json`:
 
 ```json
 {
@@ -159,102 +328,210 @@ $env:ZAI_API_KEY  = '...'
 }
 ```
 
-- `model` = pin model untuk key itu (request dengan model lain ditolak/dipetakan
-  sesuai lane); `null` = bebas.
-- `requestsPerHour` = 0 berarti tanpa batas per key.
-- Kuota memakai sliding window `GLMP_KEY_WINDOW_HOURS` (default 1 jam), dihitung
-  saat request diterima — termasuk request yang nanti gagal di upstream.
-- Habis kuota: HTTP `429`, body `key_quota_exceeded`, header `Retry-After` dalam
-  detik. Governor akun bisa juga menghasilkan `429 budget_exceeded`.
-- Pemakaian disimpan di `keys-usage.json` di state dir; `reset` lewat dashboard
-  menghapus hitungan key tersebut.
-- Perubahan `keys.json` otomatis terbaca (mtime), tanpa restart.
+- `model` pins a key to one model. `null` leaves model choice open.
+- `requestsPerHour` is a sliding-window quota. `0` means unlimited.
+- The window is `GLMP_KEY_WINDOW_HOURS`, default one hour. A request counts when
+  it is accepted, including requests that later fail upstream.
+- Exhaustion returns HTTP `429` with `key_quota_exceeded` and a `Retry-After`
+  header. The account governor can also return `429 budget_exceeded`.
+- Usage lives in `keys-usage.json` inside the state directory. Reset clears
+  only that key.
+- Key values are shown once at creation and masked afterward.
+- `keys.json` changes are picked up by modification time; no restart needed.
 
-## Antrean
+## Queue and Governor
 
-AutoClaw hanya mengizinkan satu generasi aktif. `InFlightQueue` global:
+AutoClaw permits one active generation at a time. The in-process queue accepts
+work in this order:
 
-- prioritas `interactive` > `normal` > `background`, FIFO di dalam prioritas;
-- `GLMP_QUEUE_MAX_DEPTH` (default 50): penuh → `429 queue_overflow`;
-- `GLMP_QUEUE_WAIT_MS` (default 0 = tanpa batas): menunggu terlalu lama →
-  `503 queue_timeout`.
+1. `interactive`
+2. `normal`
+3. `background`
 
-## Dashboard
+Within one priority the order is FIFO. Two limits bound the queue:
 
-`http://127.0.0.1:18793` — hanya loopback (`DASHBOARD_HOST` bisa mengubah bind,
-tapi jangan diekspos ke LAN). Halaman: Ringkasan (`/`), Akun (`/accounts`),
-Kunci (`/keys`), Request (`/requests`), Pengaturan (`/settings`), Log (`/logs`).
-Semua rute memakai History API dengan fallback server, jadi refresh langsung
-tetap bekerja.
+- `GLMP_QUEUE_MAX_DEPTH` returns `429 queue_overflow` when full.
+- `GLMP_QUEUE_WAIT_MS` returns `503 queue_timeout` after the wait limit.
+  `0` waits indefinitely.
 
-- Ringkasan: kartu total akun, akun aktif, total poin, request, token, estimasi
-  biaya, daftar akun dengan check-in semua, delapan request terakhir, tekanan
-  kuota kunci;
-- Akun: akun dashboard hasil OAuth Z.ai dan akun vault AutoClaw yang punya
-  kredensial, saldo/poin tiap akun, akun aktif, tombol jadikan aktif, ubah nama,
-  hapus akun dashboard, salin link/ID. ID panjang dipendekkan di tampilan tapi
-  nilai penuh tetap tersalin lewat tombol Salin ID;
-- Kunci: kuota, total, terakhir dipakai; tambah/nonaktifkan/reset/hapus; nilai
-  kunci hanya tampil sekali saat dibuat;
-- Request: aliran kedua lane, strip outcome, filter semua/sukses/rate limit/error;
-- Pengaturan: form ditulis ke `config.json`, lalu `/admin/reload` kedua lane;
-- Log: tail berkas di `logs\`, pilihan ikuti ujung;
-- Bahasa: tombol ID/EN di sidebar; pilihan disimpan di browser dan berlaku untuk
-  label, pesan status, serta format angka/tanggal.
+The account governor is separate from per-key quotas. It counts requests per
+account, enforces the hourly budget and the minimum dispatch gap, and persists
+its window so a restart cannot grant a fresh budget mid-hour.
 
-Akun aktif disimpan sebagai `GLMP_AUTOCLAW_ACCOUNT` di `config.json` (akun
-vault) atau sebagai `activeId` di store dashboard, lalu dipakai kedua lane
-setelah reload. Tombol **Tambah akun** membuka OAuth Z.ai dengan captcha
-Aliyun; akun vault tanpa kredensial tidak ditampilkan di daftar. Ringkasan
-menampilkan total akun, akun aktif, total poin, request, token, dan aksi
-check-in semua akun.
+## Accounts and Storage
 
-Akun dashboard memakai token OAuth Z.ai sendiri dan tidak memerlukan aplikasi
-AutoClaw desktop; akun vault tetap memerlukan AutoClaw karena tokennya dibaca
-dari vault lokal. Akun dashboard disimpan terpisah dari vault di
-`proxy-state\managed-accounts.enc`. Di Windows file dienkripsi dengan DPAPI
-CurrentUser; di POSIX dipakai AES-256-GCM dengan kunci
-`proxy-state\managed-accounts.key` (mode 0600). Token tidak pernah dikirim ke
-browser. Dashboard me-refresh token akun aktif tiap 10 menit dan tidak
-fallback ke akun lain saat token akun dashboard kedaluwarsa. Memilih akun
-dashboard mengosongkan `GLMP_AUTOCLAW_ACCOUNT`; memilih akun vault
-mengosongkan pilihan dashboard. Saldo dibaca dari endpoint wallets AutoClaw
-dan di-cache 5 menit. Footer kiri bawah menampilkan akun yang benar-benar
-dipakai token lane saat ini.
+Dashboard accounts come from **Login with Z.ai**. The flow opens the Aliyun
+captcha page, requests a signed OAuth URL through AutoClaw, and catches the
+callback on one of the official loopback ports: `18432`, `19654`, `19723` or
+`53699`. The exchanged token is stored in
+`proxy-state/managed-accounts.enc`; the browser never receives it.
 
-Keamanan:
+- On Windows the store is encrypted with DPAPI for the current user.
+- On POSIX it uses AES-256-GCM with `proxy-state/managed-accounts.key`
+  (mode `0600`).
+- Dashboard accounts refresh their own Z.ai OAuth token every ten minutes and
+  do not silently fall back to another account when refresh fails.
+- Vault accounts are read from AutoClaw and disappear from the list when they
+  have no credentials.
+- Credits are read from the AutoClaw wallets endpoint and cached for five
+  minutes.
+- The dashboard footer shows the account the active lane is actually using.
 
-- server tidak pernah mengembalikan bearer token, client key asli, atau
-  `ZAI_API_KEY`; key klien disamarkan (`pk_abcd...wxyz`);
-- `config.json` menyimpan `ZAI_API_KEY` sebagai teks biasa (lokal, sudah
-  di-gitignore). Lindungi file itu seperti kredensial lain;
-- `proxy-state\` berisi token akun dashboard terenkripsi. Jangan menyalin atau
-  meng-commit folder itu;
-- dashboard menganggap semua proses lokal tepercaya: siapa pun yang bisa
-  membuka `127.0.0.1:18793` bisa mengubah setting. Jangan bind ke LAN;
-- semua mutasi (`PUT`/`POST`/`PATCH`/`DELETE`) wajib header `X-Dashboard: 1`
-  (mencegah CSRF dari halaman lain);
-- CSP `default-src 'self'`, tanpa inline script/style;
-- dashboard memakai `PROXY_KEY` (env, atau `config.json`, fallback `akuganteng`)
-  untuk membaca `/status`. Ganti `PROXY_KEY` di ketiga proses bila perlu.
+## Start, Stop and Watchdog
 
-## Pengaman yang jangan diubah tanpa alasan
+Windows launchers all delegate to `watchdog.ps1`:
 
-- Budget akun: **300 request/jam** (`BUDGET_REQUESTS_PER_HOUR`) + jeda min 250 ms.
-- AutoClaw hanya satu generasi aktif; jangan paksa paralel.
-- Kode error AutoClaw: `403` + `410004` = ban permanen; `403` + `810002` =
-  throttle (retry otomatis).
-- `GLMP_IDENTITY_VERSION=2.0.3` dipin; naikkan kalau AutoClaw update.
-- Jangan mengubah vault DPAPI AutoClaw, prompt quarantine, atau identity shaping.
+```cmd
+start-proxy.cmd
+cscript //nologo start-proxy-hidden.vbs
+```
 
-## File
+The watchdog task is `Autoclaw-Watchdog`, scheduled every two minutes. Its
+action starts AutoClaw when the `autoclaw` backend needs it, then starts any
+missing process on ports `18791`, `18792` and `18793`. Logs go to
+`logs/watchdog.log`.
 
-- `vendor\glmproxy\` — source proxy (jangan diedit lewat `node_modules`)
-- `dashboard\server.js`, `dashboard\public\` — panel operasi
-- `proxy-state\` — store akun dashboard terenkripsi (runtime, tidak di-commit)
-- `watchdog.ps1` — penjaga AutoClaw + 3 port (dipanggil Scheduled Task)
-- `start-proxy.cmd`, `start-proxy-hidden.vbs`, `start-openai.cmd`,
-  `start-anthropic.cmd` — semua delegasi ke watchdog
-- `config.example.json` — contoh konfigurasi runtime
-- `logs\openai.log`, `logs\anthropic.log`, `logs\dashboard.log`,
-  `logs\watchdog.log`
+Manual control:
+
+```powershell
+Get-ScheduledTask -TaskName 'Autoclaw-Watchdog' | Select-Object TaskName,State
+Start-ScheduledTask -TaskName 'Autoclaw-Watchdog'
+```
+
+```powershell
+# Stop only the three project processes.
+Get-NetTCPConnection -LocalPort 18791,18792,18793 -State Listen |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```
+
+The watchdog pins `GLMP_CONFIG_PATH` and `GLMP_KEYS_FILE` to this checkout and
+drops an inherited `GLMP_HOME` that points somewhere else. This prevents a
+second copy of the project, or an old shell environment, from feeding the
+dashboard a stale `config.json`.
+
+## Files
+
+| Path | Purpose |
+|---|---|
+| `vendor/glmproxy/` | vendored proxy source and CLI |
+| `dashboard/server.js` | dashboard HTTP server, account store, key API, logs |
+| `dashboard/public/` | dashboard SPA, styles, i18n, OAuth page and artwork |
+| `config.example.json` | runtime configuration example |
+| `keys.json` | client keys (runtime, ignored by git) |
+| `config.json` | active runtime configuration (ignored by git) |
+| `proxy-state/` | encrypted dashboard accounts and governor state (ignored) |
+| `keys-usage.json` | per-key quota counters (ignored) |
+| `logs/` | lane, dashboard and watchdog logs (ignored) |
+| `watchdog.ps1` | process and AutoClaw supervisor |
+| `start-proxy.cmd`, `start-proxy-hidden.vbs` | Windows launchers |
+| `start-openai.cmd`, `start-anthropic.cmd` | single-lane launchers |
+| `run-ps-hidden.vbs` | hidden PowerShell launcher used by the watchdog |
+
+## Security
+
+- Model routes accept only the operator key or a client key. Keep the ports on
+  loopback unless you put an authenticated reverse proxy in front.
+- The dashboard trusts any local process that can open it. Do not bind
+  `DASHBOARD_HOST` to a LAN interface.
+- Every dashboard mutation requires `X-Dashboard: 1`, which blocks form-based
+  cross-site requests.
+- The dashboard sends `Content-Security-Policy: default-src 'self'` and uses no
+  inline scripts or styles.
+- Bearer tokens, client key values and `ZAI_API_KEY` are never returned in API
+  responses. Keys are masked after creation.
+- `config.json` stores `ZAI_API_KEY` as plain text. Treat it as a credential.
+- `proxy-state/` contains encrypted account tokens. Never copy it between
+  machines or commit it; DPAPI ciphertext is bound to the current Windows user.
+- Rotate `PROXY_KEY` in both lanes and the dashboard together.
+
+## Troubleshooting
+
+**`Failed to fetch` or a stale config path on the dashboard**
+
+The dashboard reports its active config file at `GET /api/status` under
+`config.path`. It must point at this checkout. Start the process through
+`watchdog.ps1`, or clear inherited `GLMP_HOME`, `GLMP_CONFIG_PATH` and
+`GLMP_KEYS_FILE` before launching Node directly.
+
+**`no_token` / `503 no_api_key`**
+
+The selected backend has no usable credential. Connect an account for
+`autoclaw`, or set `ZAI_API_KEY` for `zai`.
+
+**AutoClaw login is rejected or the vault is empty**
+
+Vault accounts require the same Windows user that owns the AutoClaw DPAPI
+vault. Dashboard OAuth accounts bypass the vault and work without the desktop
+app.
+
+**`429 budget_exceeded`**
+
+The account governor has reached the hourly budget. Wait for the window or
+raise `BUDGET_REQUESTS_PER_HOUR` deliberately. Do not disable pacing on an
+account you cannot afford to lose.
+
+**`429 key_quota_exceeded`**
+
+That client key reached its own window limit. Raise `requestsPerHour`, reset
+the key in the dashboard, or use a different key.
+
+**`503 queue_timeout` or `429 queue_overflow`**
+
+Raise `GLMP_QUEUE_MAX_DEPTH` or `GLMP_QUEUE_WAIT_MS`, or send fewer background
+requests. AutoClaw still permits only one active generation.
+
+**A port is already in use**
+
+Find the owner with `Get-NetTCPConnection -LocalPort <port> -State Listen` and
+stop only that process. Do not kill unrelated Node processes by name.
+
+**The dashboard still shows old labels or artwork**
+
+Hard refresh with `Ctrl+F5`. Static assets are served from
+`dashboard/public/`.
+
+## Development
+
+```cmd
+npm run check
+```
+
+The check runs `node --check` over every vendored module the project patches
+and every dashboard script. There is no compiler and no test suite in this
+repository; changes to lane behavior should be verified against a live
+AutoClaw or Z.ai account before release.
+
+## Releases
+
+The latest release is **v1.1.0**:
+
+- [Release notes and source archives](https://github.com/ShinRyu04/Autoclaw/releases/tag/v1.1.0)
+- [All releases](https://github.com/ShinRyu04/Autoclaw/releases)
+
+Release archives contain source only. There is no installer and no prebuilt
+binary; run `npm run check`, then start the watchdog or the three processes
+directly.
+
+To update an existing checkout:
+
+```cmd
+git pull
+npm run check
+```
+
+Restart the lanes and dashboard after pulling. Runtime files (`config.json`,
+`keys.json`, `proxy-state/`, `logs/`) are not part of the release and are left
+in place.
+
+## Credits
+
+The upstream proxy is [eequaled/GLMproxy](https://github.com/eequaled/GLMproxy),
+MIT licensed. This repository vendors version 3.3.x and adds the operations
+dashboard, bilingual interface, client-key management, account manager,
+watchdog and Windows launch scripts.
+
+Maintained by [ShinRyu04](https://github.com/ShinRyu04).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
