@@ -1,0 +1,555 @@
+// Unit tests for the shared error taxonomy and credit-tier routing.
+// Pure functions only — no network, no spawned proxies.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  loadConfig,
+  classifyUpstreamError,
+  classifyTransportError,
+  isTransientNetworkError,
+  isRetryableThrottle,
+  RETRYABLE_VERDICTS,
+  DEFAULT_THROTTLE_RETRIES,
+  DEFAULT_THROTTLE_RETRY_MS,
+  createPermanentFailureCache,
+  annotateCreditTiers,
+  resolveTierTargets,
+  resolveUpstreamModelId,
+  translateUpstreamError,
+  clampMaxOutput,
+  OUTPUT_CAPS,
+  validateChatPayload,
+  normalizeClientMessages,
+} from "../lib/core.js";
+
+let passed = 0;
+let failed = 0;
+function check(name, fn) {
+  try { fn(); passed++; console.log(`  ✓ ${name}`); }
+  catch (e) { failed++; console.log(`  ✗ ${name}: ${e.message}`); }
+}
+
+// ── Cloud classifier ────────────────────────────────────────────────────────
+
+check("403 + code 810000 quota body → 402 insufficient_credits", () => {
+  const c = classifyUpstreamError(403, '{"code":810000,"message":"GLM-5.3 free quota used up. Subscribe to a membership"}', "zaicoding_glm-5.3");
+  assert.equal(c.status, 402);
+  assert.equal(c.type, "insufficient_credits");
+  assert.equal(c.code, "quota_exhausted");
+  assert.equal(c.permanent, true);
+});
+
+check("plain 402 → quota", () => {
+  const c = classifyUpstreamError(402, "", "m");
+  assert.equal(c.status, 402);
+  assert.equal(c.permanent, true);
+});
+
+check("积分不足 body on any status → quota", () => {
+  const c = classifyUpstreamError(400, '{"message":"积分不足"}', "m");
+  assert.equal(c.status, 402);
+  assert.equal(c.permanent, true);
+});
+
+// ── Linux generation detection (spec/linux-support Task 3) ───────────────────
+
+{
+  const prevRoot = process.env.AUTOCLAW_USER_DATA_ROOT;
+  const prevOurs = process.env.AUTOCLAW_CONFIG_DIR;
+  const prevXdg = process.env.XDG_CONFIG_HOME;
+  const prevFlag = process.env.GLMP_AUTOCLAW2;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "taxonomy-autoclaw2-"));
+  delete process.env.AUTOCLAW_CONFIG_DIR;
+  delete process.env.XDG_CONFIG_HOME;
+  delete process.env.GLMP_AUTOCLAW2;
+
+  check("no vault and no override → not autoclaw 2.x", () => {
+    process.env.AUTOCLAW_USER_DATA_ROOT = root;
+    assert.equal(loadConfig({ format: "openai" }).IS_AUTOCLAW2, false);
+  });
+
+  check("a discovered vault means autoclaw 2.x", () => {
+    const accountDir = path.join(root, "accounts", "a".repeat(64));
+    fs.mkdirSync(accountDir, { recursive: true });
+    fs.writeFileSync(path.join(accountDir, "account-credentials.enc"), "v10x");
+    assert.equal(loadConfig({ format: "openai" }).IS_AUTOCLAW2, true);
+    fs.rmSync(path.join(root, "accounts"), { recursive: true, force: true });
+  });
+
+  check("GLMP_AUTOCLAW2 overrides the probe in both directions", () => {
+    process.env.GLMP_AUTOCLAW2 = "1";
+    assert.equal(loadConfig({ format: "openai" }).IS_AUTOCLAW2, true);
+    const accountDir = path.join(root, "accounts", "b".repeat(64));
+    fs.mkdirSync(accountDir, { recursive: true });
+    fs.writeFileSync(path.join(accountDir, "account-credentials.enc"), "v10x");
+    process.env.GLMP_AUTOCLAW2 = "0";
+    assert.equal(loadConfig({ format: "openai" }).IS_AUTOCLAW2, false);
+    fs.rmSync(path.join(root, "accounts"), { recursive: true, force: true });
+  });
+
+  if (prevRoot === undefined) delete process.env.AUTOCLAW_USER_DATA_ROOT;
+  else process.env.AUTOCLAW_USER_DATA_ROOT = prevRoot;
+  if (prevOurs === undefined) delete process.env.AUTOCLAW_CONFIG_DIR;
+  else process.env.AUTOCLAW_CONFIG_DIR = prevOurs;
+  if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = prevXdg;
+  if (prevFlag === undefined) delete process.env.GLMP_AUTOCLAW2;
+  else process.env.GLMP_AUTOCLAW2 = prevFlag;
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+check("401 → authentication_error", () => {
+  const c = classifyUpstreamError(401, "", "m");
+  assert.equal(c.status, 401);
+  assert.equal(c.type, "authentication_error");
+  assert.equal(c.permanent, false);
+});
+
+check("403 without quota markers → permission_error", () => {
+  const c = classifyUpstreamError(403, "nope", "m");
+  assert.equal(c.status, 403);
+  assert.equal(c.type, "permission_error");
+});
+
+check("404 → model_not_found, permanent", () => {
+  const c = classifyUpstreamError(404, "", "ghost-model");
+  assert.equal(c.status, 404);
+  assert.equal(c.code, "model_not_found");
+  assert.equal(c.permanent, true);
+});
+
+check("429 → rate_limit_error passthrough", () => {
+  const c = classifyUpstreamError(429, "", "m");
+  assert.equal(c.status, 429);
+  assert.equal(c.type, "rate_limit_error");
+});
+
+check("400 invalid request → 400 invalid_request_error", () => {
+  const c = classifyUpstreamError(400, '{"error":"invalid request"}', "m");
+  assert.equal(c.status, 400);
+  assert.equal(c.type, "invalid_request_error");
+  assert.equal(c.permanent, false);
+});
+
+check("upstream 500 → 502 with origin noted", () => {
+  const c = classifyUpstreamError(500, "boom", "m");
+  assert.equal(c.status, 502);
+  assert.match(c.message, /HTTP 500/);
+});
+
+// ── Capacity-retry policy (replaced the local-agent fallback) ───────────────
+//
+// The fallback used to re-run the prompt through AutoClaw's own desktop agent
+// on any 4xx/5xx that was not 404/429. It was removed: the agent ran a full
+// privileged session inside the app, on the operator's machine, for a request
+// the cloud had just refused — and it re-issued the same doomed cloud call
+// anyway. What replaces it is a bounded in-place retry for capacity-shaped
+// verdicts only, so a "try again shortly" throttle waits seconds and succeeds
+// instead of surfacing as a hard error to the harness.
+
+check("retry: the policy waits seconds, twice, not minutes", () => {
+  assert.equal(DEFAULT_THROTTLE_RETRIES, 2);
+  assert.equal(DEFAULT_THROTTLE_RETRY_MS, 4_000);
+});
+
+check("retry: only capacity-shaped verdicts qualify", () => {
+  for (const code of ["upstream_busy", "rate_limited_by_upstream", "upstream_failure"]) {
+    assert.equal(isRetryableThrottle({ code, permanent: false }), true, code);
+  }
+});
+
+check("retry: a ban and a quota wall are never retried", () => {
+  // Retrying these spends time, changes nothing, and a retried ban is exactly
+  // the account-damaging behaviour the governor exists to prevent.
+  assert.equal(isRetryableThrottle({ code: "account_banned", permanent: true }), false);
+  assert.equal(isRetryableThrottle({ code: "quota_exhausted", permanent: true }), false);
+  assert.equal(isRetryableThrottle({ code: "model_not_found", permanent: true }), false);
+  assert.equal(isRetryableThrottle({ code: "invalid_request", permanent: false }), false);
+  assert.equal(isRetryableThrottle(null), false);
+});
+
+check("retry: a permanent verdict is refused even if its code is capacity-shaped", () => {
+  assert.equal(isRetryableThrottle({ code: "upstream_busy", permanent: true }), false);
+});
+
+check("retry: the retryable set is exactly the three capacity verdicts", () => {
+  assert.deepEqual([...RETRYABLE_VERDICTS].sort(), ["rate_limited_by_upstream", "upstream_busy", "upstream_failure"]);
+});
+
+// ── Transport classifier ────────────────────────────────────────────────────
+
+check("dead token → 503 no_token", () => {
+  const c = classifyTransportError(new Error("Cannot read AutoClaw token from x. Make sure AutoClaw is running"));
+  assert.equal(c.status, 503);
+  assert.equal(c.code, "no_token");
+});
+
+check("upstream timeout → 504", () => {
+  const c = classifyTransportError(Object.assign(new Error("Upstream timeout — too slow"), { code: "UPSTREAM_TIMEOUT" }));
+  assert.equal(c.status, 504);
+  assert.equal(c.code, "upstream_timeout");
+});
+
+check("connection reset → 502 connection_failed", () => {
+  const c = classifyTransportError(Object.assign(new Error("socket destroyed"), { code: "ECONNRESET" }));
+  assert.equal(c.status, 502);
+});
+
+check("ECONNRESET counts as transient", () => {
+  assert.equal(isTransientNetworkError({ code: "ECONNRESET", message: "" }), true);
+  assert.equal(isTransientNetworkError({ code: "UPSTREAM_TIMEOUT", message: "Upstream timeout" }), false);
+});
+
+// ── Permanent-failure cache ─────────────────────────────────────────────────
+
+check("cache stores permanent, ignores transient", () => {
+  const cache = createPermanentFailureCache();
+  cache.mark("a", { permanent: true, status: 402, type: "t", code: "quota_exhausted", message: "x" });
+  cache.mark("b", { permanent: false, status: 500, type: "t", code: "upstream_failure", message: "y" });
+  assert.ok(cache.get("a"));
+  assert.equal(cache.get("b"), null);
+});
+
+check("cache entries expire", () => {
+  const cache = createPermanentFailureCache(-1); // already stale
+  cache.mark("a", { permanent: true, status: 402, type: "t", code: "c", message: "x" });
+  assert.equal(cache.get("a"), null);
+});
+
+// ── Credit-tier routing ─────────────────────────────────────────────────────
+
+const LIVE_CATALOG = [
+  { id: "zai_auto", name: "Auto", contextWindow: 1, maxTokens: 1 },
+  { id: "zaicoding_glm-5.3", name: "GLM-5.3", contextWindow: 1, maxTokens: 1 },
+  { id: "zai_glm-5-turbo", name: "GLM-5-Turbo", contextWindow: 1, maxTokens: 1 },
+  { id: "tdpsk_deepseek-v4-flash-202605", name: "Deepseek-V4-Flash", contextWindow: 1, maxTokens: 1 },
+  { id: "tdpsk_deepseek-v4-pro-202606", name: "DeepSeek-V4-Pro", contextWindow: 1, maxTokens: 1 },
+];
+
+check("remote tier data wins over heuristics", () => {
+  const remote = [
+    { id: "zai_auto", creditConsumptionLevel: "Low" },
+    { id: "zaicoding_glm-5.3", creditConsumptionLevel: "High" },
+    { id: "zai_glm-5-turbo", creditConsumptionLevel: "Medium" },
+    { id: "tdpsk_deepseek-v4-flash-202605", creditConsumptionLevel: "Low" },
+  ];
+  const models = annotateCreditTiers(LIVE_CATALOG, remote);
+  assert.equal(models[0].creditLevel, "Low");
+  assert.equal(models[1].creditLevel, "High");
+  assert.equal(models[2].creditLevel, "Medium");
+  assert.equal(models[3].creditLevel, "Low");
+  assert.equal(models[4].creditLevel, null); // not in remote config either
+});
+
+check("heuristic fallback mirrors app rules (auto→Low, glm53→High, turbo→Medium)", () => {
+  const models = annotateCreditTiers(LIVE_CATALOG, null);
+  assert.equal(models[0].creditLevel, "Low");
+  assert.equal(models[1].creditLevel, "High");
+  assert.equal(models[2].creditLevel, "Medium");
+});
+
+check("tier targets follow degradation rules (heuristic-only catalog)", () => {
+  const models = annotateCreditTiers(LIVE_CATALOG, null);
+  const t = resolveTierTargets(models);
+  assert.equal(t.opus, "zaicoding_glm-5.3");   // High
+  assert.equal(t.sonnet, "zai_glm-5-turbo");   // Medium
+  // Flash has no heuristic tier (the app's rules don't cover it either), so
+  // the only Low candidate is auto itself → haiku degrades to it.
+  assert.equal(t.haiku, "zai_auto");
+  assert.equal(t.default, t.sonnet);
+});
+
+check("with remote tiers, haiku picks the auto Low", () => {
+  const remote = [
+    { id: "zai_auto", creditConsumptionLevel: "Low" },
+    { id: "zaicoding_glm-5.3", creditConsumptionLevel: "High" },
+    { id: "zai_glm-5-turbo", creditConsumptionLevel: "Medium" },
+    { id: "tdpsk_deepseek-v4-flash-202605", creditConsumptionLevel: "Low" },
+  ];
+  const t = resolveTierTargets(annotateCreditTiers(LIVE_CATALOG, remote));
+  assert.equal(t.opus, "zaicoding_glm-5.3");
+  assert.equal(t.sonnet, "zai_glm-5-turbo");
+  assert.equal(t.haiku, "zai_auto");
+});
+
+check("haiku prefers the auto model inside its tier", () => {
+  const t = resolveTierTargets([
+    { id: "zai_auto", name: "Auto", creditLevel: "Low" },
+    { id: "other_low", name: "OtherLow", creditLevel: "Low" },
+    { id: "mid_model", name: "Mid", creditLevel: "Medium" },
+  ]);
+  assert.equal(t.haiku, "zai_auto");
+});
+
+check("haiku falls back to a non-auto Low when no auto candidate exists", () => {
+  const t = resolveTierTargets([
+    { id: "other_low", name: "OtherLow", creditLevel: "Low" },
+    { id: "mid_model", name: "Mid", creditLevel: "Medium" },
+  ]);
+  assert.equal(t.haiku, "other_low");
+});
+
+check("empty tiers degrade to default everywhere", () => {
+  const t = resolveTierTargets([{ id: "only_model", name: "x", creditLevel: null }]);
+  assert.equal(t.opus, "only_model");
+  assert.equal(t.sonnet, "only_model");
+  assert.equal(t.haiku, "only_model");
+  assert.equal(t.default, "only_model");
+});
+
+// ── Model ID mapping (test-contract export) ─────────────────────────────────
+
+check("resolveUpstreamModelId keeps known ids, maps auto, prefixes others", () => {
+  const known = new Set(["zai_auto", "zaicoding_glm-5.3"]);
+  assert.equal(resolveUpstreamModelId(known, "zai_auto"), "zai_auto");
+  assert.equal(resolveUpstreamModelId(known, "auto"), "zai_auto");
+  assert.equal(resolveUpstreamModelId(known, "glm-5.3"), "zai_glm-5.3");
+});
+
+// ── Fallback model catalog ─────────────────────────────────────────────────
+
+check("fallback catalog ships expected models incl glm-5.3-flash", () => {
+  const cfg = loadConfig({ format: "openai" });
+  const expectedCount = process.platform === "linux" ? 4 : 6;
+  assert.ok(Array.isArray(cfg.FALLBACK_MODELS) && cfg.FALLBACK_MODELS.length === expectedCount);
+  assert.ok(cfg.FALLBACK_MODELS.some((m) => m.id === "zai_glm-5.3-flash"));
+});
+
+// The harness declaration the upstream's prompt allowlist accepts, and the switch
+// that turns it off. Measured from the app bundle; probe-verified against the
+// live upstream (tests/experiments/harness-type-probe.mjs).
+//
+// Both checks pin the generation explicitly. They used to read the ambient
+// config, which on a machine with a 2.x install means IS_AUTOCLAW2=true — so they
+// were only ever asserting the 1.x contract because CLIENT_HEADERS carried the
+// header unconditionally, which is precisely the leak that made every Linux
+// request 406. Pinning GLMP_AUTOCLAW2=0 states the contract instead of depending
+// on where the suite happens to run.
+function withEnv(vars, fn) {
+  const prev = {};
+  for (const [k, v] of Object.entries(vars)) {
+    prev[k] = process.env[k];
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+  try { return fn(); } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+}
+
+check("client headers declare the harness the app declares", () => {
+  const cfg = withEnv({ GLMP_AUTOCLAW2: "0" }, () => loadConfig({ format: "openai" }));
+  assert.equal(cfg.CLIENT_HEADERS["X-Harness-Type"], "zcode");
+  assert.equal(cfg.CLIENT_HEADERS.x_trace_id, "autoclaw-desktop");
+});
+
+check("GLMP_HARNESS_TYPE= (empty) sends no harness declaration at all", () => {
+  const cfg = withEnv({ GLMP_AUTOCLAW2: "0", GLMP_HARNESS_TYPE: "" }, () => loadConfig({ format: "openai" }));
+  assert.equal(cfg.CLIENT_HEADERS["X-Harness-Type"], undefined);
+  assert.equal(cfg.CLIENT_HEADERS.x_trace_id, undefined);
+});
+
+// The 1.x exemption is not merely useless on 2.x, it is the 406. Measured on the
+// live upstream 2026-10-11 over the captured 2.x header set: sending
+// `X-Harness-Type: zcode` gets an empty-bodied 406 that never reaches the
+// application, and removing it from an otherwise identical request streams 200.
+// The 2.x bundle contains that header name zero times, so the app it impersonates
+// never sends it. Both halves are asserted: the header is gone AND the env knob
+// cannot put it back, because the exclusion is scoped to the generation rather
+// than left to the operator (or to a later call site) to remember.
+check("2.x sends no harness declaration, and GLMP_HARNESS_TYPE cannot force one back in", () => {
+  const prev2 = process.env.GLMP_AUTOCLAW2;
+  const prevH = process.env.GLMP_HARNESS_TYPE;
+  process.env.GLMP_AUTOCLAW2 = "1";
+  process.env.GLMP_HARNESS_TYPE = "zcode";
+  try {
+    const cfg = loadConfig({ format: "openai" });
+    assert.equal(cfg.IS_AUTOCLAW2, true);
+    assert.equal(cfg.CLIENT_HEADERS["X-Harness-Type"], undefined);
+    // The trace id rides on both generations and is measured harmless on 2.x.
+    assert.equal(cfg.CLIENT_HEADERS.x_trace_id, "autoclaw-desktop");
+    assert.equal(cfg.CLIENT_HEADERS["X-Version"], "2.0.3");
+    assert.equal(cfg.CLIENT_HEADERS["X-Tm"], process.platform === "win32" ? "win" : "linux");
+  } finally {
+    if (prev2 === undefined) delete process.env.GLMP_AUTOCLAW2; else process.env.GLMP_AUTOCLAW2 = prev2;
+    if (prevH === undefined) delete process.env.GLMP_HARNESS_TYPE; else process.env.GLMP_HARNESS_TYPE = prevH;
+  }
+});
+
+// One state-dir rule for the whole proxy. The app relocates its state with this
+// env var, so the token, the runtime config and the proxy's own state all have
+// to follow it — otherwise a relocated install reads a stale path silently.
+check("OPENCLAW_STATE_DIR carries the token, runtime and proxy-state paths with it", () => {
+  const prevOpen = process.env.OPENCLAW_STATE_DIR;
+  const prevProxy = process.env.PROXY_STATE_DIR;
+  const moved = path.join(os.tmpdir(), "glmp-relocated-state");
+  process.env.OPENCLAW_STATE_DIR = moved;
+  delete process.env.PROXY_STATE_DIR;
+  try {
+    const cfg = loadConfig({ format: "openai" });
+    assert.equal(cfg.AUTOCLAW_STATE_DIR, moved);
+    assert.equal(cfg.TOKEN_FILE, path.join(moved, "request-headers.json"));
+    assert.equal(cfg.RUNTIME_FILE, path.join(moved, "openclaw.runtime.json"));
+    assert.equal(cfg.RUNTIME_LAST_GOOD, path.join(moved, "openclaw.runtime.json.last-good"));
+    assert.equal(cfg.STATE_DIR, path.join(moved, "proxy-state"));
+  } finally {
+    if (prevOpen === undefined) delete process.env.OPENCLAW_STATE_DIR; else process.env.OPENCLAW_STATE_DIR = prevOpen;
+    if (prevProxy === undefined) delete process.env.PROXY_STATE_DIR; else process.env.PROXY_STATE_DIR = prevProxy;
+  }
+});
+
+check("without it, the default state dir is still the app's usual one", () => {
+  const prevOpen = process.env.OPENCLAW_STATE_DIR;
+  delete process.env.OPENCLAW_STATE_DIR;
+  try {
+    const cfg = loadConfig({ format: "openai" });
+    assert.equal(cfg.AUTOCLAW_STATE_DIR, path.join(os.homedir(), ".openclaw-autoclaw"));
+    assert.equal(cfg.TOKEN_FILE, path.join(os.homedir(), ".openclaw-autoclaw", "request-headers.json"));
+  } finally {
+    if (prevOpen !== undefined) process.env.OPENCLAW_STATE_DIR = prevOpen;
+  }
+});
+
+check("FALLBACK_MODELS_PATH override is honored", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "glmproxy-fb-"));
+  fs.writeFileSync(path.join(tmp, "models.json"), JSON.stringify({ models: [{ id: "custom-model", name: "Custom" }] }));
+  process.env.FALLBACK_MODELS_PATH = path.join(tmp, "models.json");
+  try {
+    const cfg = loadConfig({ format: "openai" });
+    assert.equal(cfg.FALLBACK_MODELS.length, 1);
+    assert.equal(cfg.FALLBACK_MODELS[0].id, "custom-model");
+  } finally {
+    delete process.env.FALLBACK_MODELS_PATH;
+  }
+});
+
+check("malformed FALLBACK_MODELS_PATH degrades to built-ins", () => {
+  process.env.FALLBACK_MODELS_PATH = "C:/definitely/not/here.json";
+  try {
+    const cfg = loadConfig({ format: "openai" });
+    assert.ok(cfg.FALLBACK_MODELS.length >= 4);
+    assert.ok(cfg.FALLBACK_MODELS.every((m) => typeof m.id === "string"));
+  } finally {
+    delete process.env.FALLBACK_MODELS_PATH;
+  }
+});
+
+// ── Account ban (403 + code 410004) ─────────────────────────────────────────
+
+check("403 + 410004 banned body → permanent 403 account_banned", () => {
+  const c = classifyUpstreamError(403, '{"code":410004,"message":"账号已被封禁"}', "zai_auto");
+  assert.equal(c.status, 403);
+  assert.equal(c.code, "account_banned");
+  assert.equal(c.permanent, true);
+  assert.match(c.message, /Account banned/);
+});
+
+// The free-tier capacity throttle (403 + 810002, "kind":"pay-view") is neither a
+// ban nor quota exhaustion — the account works again shortly. It must classify as
+// a 429 so clients back off, and it must qualify for the bounded capacity retry:
+// measured live 2026-09-22, the old path spent ~120 s per occurrence marching it
+// into the desktop agent, which re-issued the same cloud call and failed the same
+// way. Now it waits seconds and tries the cloud again, in place.
+check("403 + 810002 pay-view throttle → 429 upstream_busy, and it is retryable", () => {
+  const c = classifyUpstreamError(403, '{"action":{"kind":"pay-view"},"code":810002,"image_url":"https://example.invalid/f.png","message":"We\'re experiencing high demand right now. Please try again shortly, or upgrade to a monthly subscription for priority access."}', "tdpsk_deepseek-v4-flash-202605");
+  assert.equal(c.status, 429);
+  assert.equal(c.code, "upstream_busy");
+  assert.equal(c.permanent, false);
+  assert.equal(isRetryableThrottle(c), true);
+});
+
+check("账号已被封禁 translates to English", () => {
+  assert.equal(translateUpstreamError("账号已被封禁"), "Account banned by AutoClaw");
+});
+
+// ── Max-output clamp (upstream silently swaps to deepseek when exceeded) ─────
+
+check("every GLM model clamps to the real 131072 cap", () => {
+  for (const id of ["zaicoding_glm-5.3", "zai_glm-5.3-flash", "zai_glm-5-turbo", "zai_auto"]) {
+    assert.equal(clampMaxOutput(id, 393_216), 131_072, `${id} should clamp 393216 → 131072`);
+    assert.equal(clampMaxOutput(id, 131_072), 131_072, `${id} at-cap passes through`);
+    assert.equal(clampMaxOutput(id, 131_073), 131_072, `${id} one-over clamps`);
+  }
+});
+
+check("deepseek models keep their 393216 cap", () => {
+  for (const id of ["tdpsk_deepseek-v4-flash-202605", "tdpsk_deepseek-v4-pro-202606"]) {
+    assert.equal(clampMaxOutput(id, 393_216), 393_216);
+    assert.equal(clampMaxOutput(id, 500_000), 393_216);
+  }
+});
+
+check("unknown models and absent values pass through untouched", () => {
+  assert.equal(clampMaxOutput("mystery-model", 500_000), 500_000);
+  assert.equal(clampMaxOutput("zai_auto", undefined), undefined);
+  assert.equal(clampMaxOutput("zai_auto", null), null);
+});
+
+check("catalog claims never exceed the verified output caps", () => {
+  const cfg = loadConfig({ format: "openai" });
+  for (const m of cfg.FALLBACK_MODELS) {
+    if (OUTPUT_CAPS[m.id]) assert.ok(m.maxTokens <= OUTPUT_CAPS[m.id], `${m.id} maxTokens ${m.maxTokens} > cap ${OUTPUT_CAPS[m.id]}`);
+  }
+});
+
+// ── Image payload handling (native vision passthrough) ──────────────────────
+
+const dataUrl = (bytes) => `data:image/png;base64,${"A".repeat(Math.ceil((bytes * 4) / 3))}`;
+const imgMsg = (bytes) => ({
+  model: "zai_glm-5.3-flash",
+  messages: [{ role: "user", content: [
+    { type: "text", text: "What do you see?" },
+    { type: "image_url", image_url: { url: dataUrl(bytes) } },
+  ] }],
+});
+
+check("a 400KB image attachment does NOT trip the per-message text cap", () => {
+  assert.equal(validateChatPayload(imgMsg(400 * 1024)), null);
+});
+
+check("oversized plain text still 413s", () => {
+  const body = { messages: [{ role: "user", content: "x".repeat(300 * 1024) }] };
+  const err = validateChatPayload(body);
+  assert.equal(err?.statusCode, 413);
+  assert.match(err.message, /individual message/);
+});
+
+check("image over MAX_IMAGE_BYTES 413s with a dedicated message", () => {
+  process.env.MAX_IMAGE_BYTES = "1000";
+  try {
+    const err = validateChatPayload(imgMsg(50 * 1024));
+    assert.equal(err?.statusCode, 413);
+    assert.match(err.message, /image attachment/);
+  } finally { delete process.env.MAX_IMAGE_BYTES; }
+});
+
+check("text inside multimodal arrays counts toward the text caps", () => {
+  const body = { messages: [{ role: "user", content: [
+    { type: "text", text: "x".repeat(300 * 1024) },
+    { type: "image_url", image_url: { url: dataUrl(1024) } },
+  ] }] };
+  const err = validateChatPayload(body);
+  assert.equal(err?.statusCode, 413);
+});
+
+check("normalizeClientMessages flattens all-text arrays but preserves images", () => {
+  const out = normalizeClientMessages({ messages: [
+    { role: "user", content: [{ type: "text", text: "hello " }, { type: "text", text: "world" }] },
+    { role: "user", content: [
+      { type: "text", text: "look" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+    ] },
+    { role: "developer", content: "behave" },
+  ] });
+  assert.equal(out[0].content, "hello \nworld");
+  assert.ok(Array.isArray(out[1].content), "multimodal content must stay an array");
+  assert.equal(out[1].content[1].type, "image_url");
+  assert.equal(out[1].content[1].image_url.url, "data:image/png;base64,AAAA");
+  assert.equal(out[2].role, "system");
+});
+
+console.log(`\n  ${passed}/${passed + failed} passed`);
+process.exit(failed ? 1 : 0);

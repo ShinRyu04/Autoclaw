@@ -6,3 +6,8 @@ keys-usage.json
 .tmp-test/
 .tmp-zai/
 proxy-state/
+proxy_requests*.json
+proxy_requests*.jsonl
+proxy_requests*.lock
+test_requests.jsonl
+.env

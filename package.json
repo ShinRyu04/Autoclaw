@@ -14,7 +14,9 @@
     "start:openai": "node bin/cli.js --openai --port 18791",
     "start:anthropic": "node bin/cli.js --anthropic --port 18792",
     "dashboard": "node dashboard/server.js",
-    "check": "node --check openai.js && node --check anthropic.js && node --check bin/cli.js && node --check lib/core.js && node --check lib/queue.js && node --check lib/auth.js && node --check lib/keyusage.js && node --check lib/status.js && node --check lib/runtime-config.js && node --check lib/vault.js && node --check lib/reload.js && node --check dashboard/server.js && node --check dashboard/public/app.js && node --check dashboard/public/i18n.js && node --check dashboard/public/oauth-zai.js"
+    "check": "node --check openai.js && node --check anthropic.js && node --check bin/cli.js && node --check lib/core.js && node --check lib/queue.js && node --check lib/auth.js && node --check lib/keyusage.js && node --check lib/status.js && node --check lib/runtime-config.js && node --check lib/vault.js && node --check lib/reload.js && node --check dashboard/server.js && node --check dashboard/public/app.js && node --check dashboard/public/i18n.js && node --check dashboard/public/oauth-zai.js",
+    "test": "node tests/taxonomy.mjs",
+    "test:live": "node tests/pen-test-p1.mjs && node tests/pen-test-p2.mjs && node tests/pen-test-p3.mjs && node tests/pen-test-p4.mjs && node tests/pen-test-p5.mjs && node tests/catalog-refresh.mjs"
   },
   "engines": {
     "node": ">=20"

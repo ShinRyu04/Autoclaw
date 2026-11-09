@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Syntax checks
+        run: |
+          for f in lib/*.js openai.js anthropic.js main.js bin/cli.js; do
+            node --check "$f" || exit 1
+          done
+
+      - run: npm test
+
+      - name: Tag must match package.json version
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          PKG_VERSION=$(npm pkg get version | tr -d '"')
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json is $PKG_VERSION but tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes

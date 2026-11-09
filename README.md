@@ -459,6 +459,10 @@ dashboard a stale `config.json`.
 | `start-proxy.cmd`, `start-proxy-hidden.vbs` | Windows launchers |
 | `start-openai.cmd`, `start-anthropic.cmd` | single-lane launchers |
 | `run-ps-hidden.vbs` | hidden PowerShell launcher used by the watchdog |
+| `tests/` | upstream unit, pen-test, vault, secret-service and queue suites |
+| `screenshots/` | upstream proxy screenshots |
+| `.github/workflows/` | CI and release workflows |
+| `BAN-RISK-AND-LIMITS.md` | upstream account-risk notes, read before heavy use |
 
 ## Security
 
@@ -476,6 +480,8 @@ dashboard a stale `config.json`.
 - `proxy-state/` contains encrypted account tokens. Never copy it between
   machines or commit it; DPAPI ciphertext is bound to the current Windows user.
 - Rotate `PROXY_KEY` in both lanes and the dashboard together.
+- Read [`BAN-RISK-AND-LIMITS.md`](BAN-RISK-AND-LIMITS.md) before running large
+  batches; the governor exists because upstream bans are permanent.
 
 ## Troubleshooting
 
@@ -527,12 +533,17 @@ Hard refresh with `Ctrl+F5`. Static assets are served from
 
 ```cmd
 npm run check
+npm test
 ```
 
-The check runs `node --check` over every proxy module and every dashboard
-script. There is no compiler and no test suite in this
-repository; changes to lane behavior should be verified against a live
-AutoClaw or Z.ai account before release.
+`npm run check` runs `node --check` over every proxy module and every dashboard
+script. `npm test` runs the upstream taxonomy smoke test. The remaining suites
+in `tests/` are kept from upstream for reference; some need a live AutoClaw
+vault or account, so run them individually with the same environment the
+upstream project expects. `npm run test:live` runs the network pen-tests and
+catalog refresh. Changes to lane behavior should also be verified live before
+release. CI runs syntax checks and the taxonomy suite on Linux, Windows and
+macOS.
 
 ## Releases
 
