@@ -621,6 +621,19 @@ The dashboard reports its active config file at `GET /api/status` under
 The selected backend has no usable credential. Connect an account for
 `autoclaw`, or set `ZAI_API_KEY` for `zai`.
 
+**`502 upstream_connection_failed` with `ECONNREFUSED 127.0.0.1:1`**
+
+A parent shell or test harness exported `UPSTREAM_PORT=1`. Unset
+`UPSTREAM_PORT`, `UPSTREAM_HOST`, `UPSTREAM_BASE` and `UPSTREAM_PATH` before
+starting the gateway. A real environment variable wins over `config.json`, so
+editing the config file will not mask it.
+
+**`401 invalid_api_key` even though the dashboard key is correct**
+
+The lane inherited `PROXY_KEY` from its parent environment; test harnesses often
+export `PROXY_KEY=testkey`. Start the launcher from Explorer, or set
+`PROXY_KEY` explicitly for the process that starts the watchdog.
+
 **AutoClaw login is rejected or the vault is empty**
 
 Vault accounts require access to the AutoClaw vault of the current OS user:
