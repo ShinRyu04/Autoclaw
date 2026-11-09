@@ -1,4 +1,4 @@
-# Autoclaw — AutoClaw / Z.ai Gateway (lokal)
+# AutoClaw / Z.ai Gateway
 
 <p align="center"><img src="dashboard/public/autoclaw.png" alt="Autoclaw" width="160"></p>
 
