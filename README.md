@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="dashboard/public/autoclaw.png" alt="Autoclaw" width="160">
+  <img src="dashboard/public/autoclaw-readme.png" alt="Autoclaw" width="180">
 </p>
 
 <h1 align="center">AutoClaw / Z.ai Gateway</h1>
