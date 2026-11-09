@@ -1,0 +1,20 @@
+{
+  "name": "autoclaw",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Autoclaw: AutoClaw/Z.ai gateway + dashboard operasi",
+  "scripts": {
+    "start": "powershell -NoProfile -ExecutionPolicy Bypass -File watchdog.ps1",
+    "start:openai": "node vendor/glmproxy/bin/cli.js --openai --port 18791 --key akuganteng",
+    "start:anthropic": "node vendor/glmproxy/bin/cli.js --anthropic --port 18792 --key akuganteng",
+    "dashboard": "node dashboard/server.js",
+    "check": "node --check vendor/glmproxy/openai.js && node --check vendor/glmproxy/anthropic.js && node --check vendor/glmproxy/lib/core.js && node --check vendor/glmproxy/lib/queue.js && node --check vendor/glmproxy/lib/auth.js && node --check vendor/glmproxy/lib/keyusage.js && node --check vendor/glmproxy/lib/status.js && node --check vendor/glmproxy/lib/runtime-config.js && node --check vendor/glmproxy/lib/vault.js && node --check vendor/glmproxy/lib/reload.js && node --check dashboard/server.js && node --check dashboard/public/app.js && node --check dashboard/public/i18n.js && node --check dashboard/public/oauth-zai.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "glmproxy": "^3.3.0"
+  }
+}

@@ -1,0 +1,700 @@
+#!/usr/bin/env node
+
+import path from "path";
+import fs from "fs";
+import { fileURLToPath, pathToFileURL } from "url";
+import { promptSelect, promptInput, promptNumber } from "../lib/prompts.js";
+import http from "http";
+import { spawnSync } from "child_process";
+import {
+  getModelCatalog, loadConfig, createTokenLayer,
+  fetchRemoteModelConfig, annotateCreditTiers, resolveTierTargets,
+  getIdentityLayer, getPacingGovernor, getConfigHeartbeat, COLORS,
+} from "../lib/core.js";
+import { DEFAULT_PORTS, DEFAULT_HOST, DEFAULT_PROXY_KEY, TEST_PROXY_PORT } from "../lib/constants.js";
+import { describeTokenWindow } from "../lib/governor.js";
+import {
+  findClaudeBin, buildLaunchArgs, buildLaunchSettings, writeLaunchSettings,
+  detectSettingsFlag, waitForProxy, launchClaude, CLAUDE_BIN_ENV, LAUNCH_SETTINGS_FILE,
+} from "../lib/claude-code.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+
+const FLAGS = ["--anthropic", "--openai", "--port", "--host", "--key", "--rate-limit", "--max-messages", "--doctor", "--test-models", "--test", "--limit", "--budget", "--stop", "--help", "-h"];
+
+// Current effective MAX_MESSAGES env value as a finite number, or Infinity.
+function effectiveMaxMessages() {
+  const raw = process.env.MAX_MESSAGES;
+  if (!raw) return Infinity;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : Infinity;
+}
+
+function formatMaxMessages() {
+  const n = effectiveMaxMessages();
+  return Number.isFinite(n) ? `${n} entries` : "unlimited";
+}
+
+// Current effective hourly account budget. 0 means the governor is off.
+function effectiveBudget() {
+  const raw = process.env.BUDGET_REQUESTS_PER_HOUR;
+  if (raw === undefined || raw === "") return 300;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function formatBudget() {
+  const n = effectiveBudget();
+  return n > 0 ? `${n} requests/hour` : "off — upstream requests are unmetered";
+}
+
+function showHelp() {
+  console.log(`
+    AutoClaw Gateway CLI
+  ───────────────────────────────────────────
+  Usage:
+    npx glmproxy [options]
+    glmproxy [options]
+
+  Options:
+    --anthropic           Run in Anthropic API format (/v1/messages)
+    --openai              Run in OpenAI API format (/v1/chat/completions) [default]
+    --port <number>       Port to listen on (default: ${DEFAULT_PORTS.openai} for OpenAI, ${DEFAULT_PORTS.anthropic} for Anthropic)
+    --host <ip>           Host to bind (default: ${DEFAULT_HOST})
+    --key <string>        Authentication key for clients (default: ${DEFAULT_PROXY_KEY})
+    --rate-limit <n>      Max requests per second per IP (default: 30)
+    --max-messages <n>    Max message / entity limit (0/unset = unlimited; or 128, 256, 512, 1024)
+                          If you have a compression system, leaving this unlimited is preferred.
+    --doctor              Live credit-tier scan of AutoClaw's catalog + routing map
+    --test-models         Test all configured models against upstream and show live health
+    --stop                Kill any other running glmproxy instances and exit
+    --limit               Set or clear the max entity / messages limit (own menu item)
+    --budget [n]          Set or clear the hourly account budget (anti-ban pacing; 0 = off)
+    --help, -h            Show this help message
+
+  Environment:
+    MAX_MESSAGES      Max messages limit per request (0/unset = unlimited; or 128, 256, 512, 1024)
+    BUDGET_REQUESTS_PER_HOUR
+                      Upstream requests per hour, per AutoClaw account (default: 300; 0 = off).
+                      The anti-ban guard: warns at 80%, answers 429 budget_exceeded at 100%.
+    GLMP_MIN_GAP_MS   Minimum gap between upstream calls, jittered (default: 250; 0 = off)
+    GOVERNOR_PERSIST=0
+                      Do not carry the budget window across restarts
+    PREFER_LOCAL      Removed. The local desktop-agent fallback is gone, so the
+                      cloud is the only route (setting PREFER_LOCAL=1 logs a notice)
+    TRUSTED_PROXIES   Comma-separated IPs whose X-Forwarded-For header is trusted
+  `);
+  process.exit(0);
+}
+
+// Cloud-attempt evidence from the isolated test ring: entries are terminal
+// outcomes only. A cloud-served success is its own via!=="local" 200; a
+// locally-served request that the cloud rejected first carries its verdict
+// in cloud_status on that same entry. Scan every entry for this model in
+// this run and derive a compact summary.
+function deriveCloudStatus(entries) {
+  if (entries.some((e) => e.via !== "local" && e.status === 200)) {
+    return `cloud ${COLORS.GREEN}ok${COLORS.RESET}`;
+  }
+  const withEvidence = entries.filter((e) => e.cloud_status != null);
+  if (!withEvidence.length) return null;
+  return `cloud ${withEvidence[withEvidence.length - 1].cloud_status}`;
+}
+
+function readTestRing(filePath, sinceTs) {
+  try {
+    const entries = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    if (!Array.isArray(entries)) return [];
+    return entries.filter((e) => {
+      const ts = Date.parse(e.timestamp || e.ts || "");
+      // Tolerate missing timestamps: the ring is capped at 50 entries and the
+      // test log is isolated per-run, so anything without one is still ours.
+      return Number.isNaN(ts) ? true : ts >= sinceTs;
+    });
+  } catch (_) { return []; }
+}
+
+async function runModelTests() {
+  const config = loadConfig({ format: "openai" });
+  const catalog = getModelCatalog(config);
+
+  console.log(`\n  🧪  AutoClaw Model Health Test`);
+  console.log(`  ───────────────────────────────────────────`);
+
+  // Spin up a temporary proxy on a test port so requests go through
+  // the full pipeline (validate → shape → governor → cloud).
+  const testPort = TEST_PROXY_PORT;
+  const testKey = "model-test-" + Date.now();
+
+  // Isolated log files: without these, the spawned child's read-modify-write
+  // on the shared ring log clobbers entries written by your running proxies
+  // (observed: whole batches of results vanishing mid-run).
+  const testEnvLog = path.join(process.cwd(), "proxy_requests_test.json");
+  const testEnvJsonl = path.join(process.cwd(), "proxy_requests_test.jsonl");
+
+  const env = {
+    ...process.env,
+    PORT: String(testPort),
+    HOST: "127.0.0.1",
+    PROXY_KEY: testKey,
+    LOG_LEVEL: "silent",
+    REQUEST_LOG_FILE: testEnvLog,
+    JSONL_FILE: testEnvJsonl,
+    // Operator-initiated sweep: exempt from the account budget (the governor
+    // still counts it in a separate diagnostics bucket) so a health scan can
+    // neither be blocked by the pacing nor push the account over the edge it
+    // exists to protect. Without this, a full sweep would spend the real budget.
+    GLMP_DIAGNOSTIC: "1",
+  };
+
+  const { spawn } = await import("child_process");
+  const proxyProc = spawn("node", [path.join(__dirname, "..", "openai.js")], {
+    env,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+
+  // Wait for the test proxy to accept connections
+  const ready = await new Promise((resolve) => {
+    let tries = 0;
+    const interval = setInterval(() => {
+      const probe = http.get({ hostname: "127.0.0.1", port: testPort, path: "/healthz" }, (res) => {
+        res.resume();
+        clearInterval(interval);
+        resolve(true);
+      });
+      probe.on("error", () => {
+        if (++tries > 50) { clearInterval(interval); resolve(false); }
+      });
+    }, 100);
+  });
+
+  if (!ready) {
+    console.log(`  ${COLORS.RED}✗ Could not start test proxy${COLORS.RESET}\n`);
+    proxyProc.kill();
+    return;
+  }
+
+  // Per-request attribution lives in the isolated log the test proxy writes.
+  console.log(`  Request log  : ${path.basename(testEnvLog)}\n`);
+
+  // Cloud-evidence baseline: only entries written from this run onward count.
+  const runStart = Date.now() - 1000;
+
+  for (const model of catalog.models) {
+    process.stdout.write(`  Testing ${COLORS.CYAN}${model.name}${COLORS.RESET} (${model.id})... `);
+    const startTime = Date.now();
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const body = JSON.stringify({
+          model: model.id,
+          messages: [{ role: "user", content: "Reply with only the word PONG" }],
+          stream: false,
+        });
+        const req = http.request({
+          hostname: "127.0.0.1",
+          port: testPort,
+          path: "/v1/chat/completions",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testKey}`,
+            "Content-Length": Buffer.byteLength(body),
+          },
+          timeout: 120000,
+        }, (res) => {
+          let data = "";
+          res.on("data", (c) => (data += c));
+          res.on("end", () => resolve({ status: res.statusCode, body: data }));
+        });
+        req.on("error", reject);
+        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+        req.write(body);
+        req.end();
+      });
+
+      const elapsed = Date.now() - startTime;
+      // Give the proxy a beat to flush its ring write before we read it back
+      await new Promise((r) => setTimeout(r, 150));
+      const cloudStatus = deriveCloudStatus(
+        readTestRing(testEnvLog, runStart).filter((e) => e.model === model.id),
+      );
+      if (result.status === 200) {
+        let answer = "";
+        let servedBy = "";
+        try {
+          const parsed = JSON.parse(result.body);
+          answer = parsed.choices?.[0]?.message?.content || "";
+          // Every answer here comes from the cloud now — there is no second
+          // route. Tag the upstream status when it is not a plain 200, i.e.
+          // when the in-process retry absorbed an attempt before answering.
+          servedBy = cloudStatus ? ` ${COLORS.GRAY}[${cloudStatus}]${COLORS.RESET}` : "";
+        } catch {}
+        const preview = answer.length > 40 ? answer.slice(0, 40) + "…" : answer;
+        console.log(`${COLORS.BLUE}✔ working${COLORS.RESET}${servedBy} ${COLORS.GRAY}(${elapsed}ms) → ${preview}${COLORS.RESET}`);
+      } else {
+        let detail = "";
+        try { detail = JSON.parse(result.body).error?.message || ""; } catch {}
+        console.log(`${COLORS.RED}✗ failed (${result.status})${COLORS.RESET} ${COLORS.GRAY}(${elapsed}ms)${detail ? ` → ${detail}` : ""}`);
+      }
+    } catch (err) {
+      const elapsed = Date.now() - startTime;
+      console.log(`${COLORS.RED}✗ error: ${err.message}${COLORS.RESET} ${COLORS.GRAY}(${elapsed}ms)${COLORS.RESET}`);
+    }
+  }
+
+  console.log(`\n  ${COLORS.GRAY}Legend: [cloud NNN] = a first attempt returned HTTP NNN (capacity throttle or 5xx) and the proxy retried in-process before answering; [cloud ok] = first attempt succeeded.${COLORS.RESET}`);
+  console.log("");
+  proxyProc.kill();
+  await new Promise((r) => setTimeout(r, 300));
+}
+
+// Live credit-tier doctor: remote model-config → runtime catalog → built-in
+// fallback, routed through the SAME annotate/resolve pair the Anthropic
+// entrypoint uses. No duplicated fragment matching here anymore.
+async function runDoctor() {
+  const config = loadConfig({ format: "openai" });
+  const catalog = getModelCatalog(config);
+
+  console.log(`\n  AutoClaw model doctor`);
+  console.log(`  ───────────────────────────────────────────`);
+
+  let source = catalog.source ? path.basename(catalog.source) : "built-in fallback";
+  let status = catalog.fallback ? "runtime catalog unavailable" : "runtime catalog loaded";
+
+  // Read the JWT straight from AutoClaw's token file (silent — the doctor
+  // must work even while the desktop app is closed).
+  let jwt = null;
+  try {
+    const tokenLayer = createTokenLayer(config, { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, success: () => {} });
+    jwt = tokenLayer.loadToken();
+  } catch (_) {}
+
+  const remoteModels = await fetchRemoteModelConfig(config, jwt);
+  if (remoteModels) {
+    source = "remote model-config";
+    status = `live credit-tier data (${remoteModels.length} models)`;
+  } else if (jwt) {
+    status += " · remote fetch failed — heuristic tiers apply";
+  } else {
+    status += " · no AutoClaw token — heuristic tiers apply";
+  }
+
+  const models = annotateCreditTiers(catalog.models, remoteModels);
+  const targets = resolveTierTargets(models);
+
+  console.log(`  Source: ${source}`);
+  console.log(`  Status: ${status}\n`);
+
+  models.forEach((model, index) => {
+    const context = model.contextWindow ? `${Math.round(model.contextWindow / 1024)}K context` : "context unknown";
+    const output = model.maxTokens ? `${Math.round(model.maxTokens / 1024)}K max output` : "output unknown";
+    const tier = model.creditLevel ? `${model.creditLevel} credit` : "tier unknown";
+    console.log(`  ${index + 1}. ${model.name} (${model.id}) — ${tier}, ${context}, ${output}`);
+  });
+
+  console.log(`\n  Claude alias routing (by credit tier):`);
+  console.log(`  claude-opus-*   → ${targets.opus ?? "?"}`);
+  console.log(`  claude-sonnet-* → ${targets.sonnet ?? "?"}`);
+  console.log(`  claude-haiku-*  → ${targets.haiku ?? "?"}`);
+  console.log(`  unknown model   → ${targets.default ?? "?"}`);
+
+  // Identity freshness (Requirement 1.5): which source supplies the client
+  // identity, how old the newest observation is, and whether the remote config
+  // advertises a different client version than the one we send.
+  try {
+    const identity = getIdentityLayer(config).freshness();
+    const age = identity.ageMs != null ? `${Math.round(identity.ageMs / 1000)}s ago` : "n/a";
+    console.log(`  Identity: ${identity.source} · X-Version=${identity.version ?? "?"} · observed ${age}`);
+    if (identity.knownDrift) {
+      console.log(`  ${COLORS.YELLOW}⚠ identity drift: sending ${identity.knownDrift.localVersion}, remote advertises ${identity.knownDrift.remoteVersion}${COLORS.RESET}`);
+    }
+  } catch (_) { /* identity freshness is diagnostic only */ }
+
+  // Pacing governor (Requirements 3.5, 3.11): which account the budget is keyed
+  // to, how much of the hour is spent, and when the token expires. Derived from
+  // decoded claims only — the token itself is never printed.
+  try {
+    const governor = getPacingGovernor(
+      config,
+      { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      { getToken: () => jwt },
+    );
+    const info = governor.accountInfo();
+
+    if (info.key === "unknown" && !jwt) {
+      console.log(`  Governor: ${formatBudget()} · no AutoClaw token to key the account on`);
+    } else {
+      const burn = info.pctBudget != null
+        ? `${info.windowRequests}/${info.budget} requests this hour (${info.pctBudget}%)`
+        : `${info.windowRequests} requests (budget off)`;
+      const guest = info.isGuest ? " (guest)" : "";
+      console.log(`  Governor: ${info.state} · ${burn} · account ${info.key}${guest}`);
+      // One line, from the same pure function the suite asserts (Task 7b): a
+      // stale token is a file problem that looks like an account problem, so it
+      // is worth a warning row rather than being absent when it matters most.
+      const window = describeTokenWindow(info);
+      console.log(`  ${window.warn ? COLORS.YELLOW : ""}Token   : ${window.text}${window.warn ? COLORS.RESET : ""}`);
+      if (info.diagnosticRequests) {
+        console.log(`  Sweeps  : ${info.diagnosticRequests} budget-exempt diagnostic request(s) this session`);
+      }
+    }
+  } catch (_) { /* governor reporting is diagnostic only */ }
+
+  // Companion traffic (Requirement 5.4): the heartbeat's cadence and health.
+  // The doctor does not start it — a fresh process has not polled yet, and
+  // "never" is the honest reading. consecutiveFailures is the field that
+  // matters when the config endpoint is down or the account is quarantined.
+  try {
+    const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, success: () => {} };
+    const hb = getConfigHeartbeat(config, silent).status();
+    const every = hb.intervalMs ? `${Math.round(hb.intervalMs / 1000)}s` : "off";
+    const last = hb.lastPollAt != null ? `${Math.round((Date.now() - hb.lastPollAt) / 1000)}s ago` : "never";
+    const failures = hb.consecutiveFailures
+      ? ` · ${COLORS.YELLOW}${hb.consecutiveFailures} consecutive failure(s)${COLORS.RESET}`
+      : "";
+    console.log(`  Heartbeat: ${every} · polls ${hb.polls} · last ${last}${failures}`);
+    if (hb.lastError) console.log(`  ${COLORS.YELLOW}⚠ heartbeat: ${hb.lastError}${COLORS.RESET}`);
+  } catch (_) { /* heartbeat reporting is diagnostic only */ }
+
+  console.log("");
+}
+
+if (args.includes("--help") || args.includes("-h")) {
+  showHelp();
+}
+
+if (args.includes("--test-models") || args.includes("--test")) {
+  await runModelTests();
+  process.exit(0);
+}
+
+if (args.includes("--doctor")) {
+  await runDoctor();
+  process.exit(0);
+}
+
+// ─── --stop / stop: kill other running glmproxy instances ───────────────────
+// Matches processes whose command line mentions glmproxy AND cli.js (covers
+// npm-global installs and repo checkouts started via bin/cli.js) while never
+// matching this very process. Dev entrypoints launched as `node openai.js`
+// carry no glmproxy marker — stop those by hand.
+function findGlmproxyInstances() {
+  const selfPid = process.pid;
+  const hits = [];
+  if (process.platform === "win32") {
+    const res = spawnSync("powershell", ["-NoProfile", "-Command",
+      `Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^node' -and $_.CommandLine -match 'glmproxy' -and $_.CommandLine -match 'cli\\.js' } | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`,
+    ], { encoding: "utf8", windowsHide: true });
+    for (const line of (res.stdout || "").split(/\r?\n/)) {
+      const idx = line.indexOf("|");
+      if (idx <= 0) continue;
+      const pid = Number.parseInt(line.slice(0, idx), 10);
+      const cmd = line.slice(idx + 1);
+      if (Number.isInteger(pid) && pid > 0 && pid !== selfPid) hits.push({ pid, cmd });
+    }
+  } else {
+    const res = spawnSync("ps", ["-eo", "pid=,command="], { encoding: "utf8" });
+    for (const line of (res.stdout || "").split("\n")) {
+      const m = line.match(/^\s*(\d+)\s+(.+)$/);
+      if (!m) continue;
+      const pid = Number.parseInt(m[1], 10);
+      const cmd = m[2];
+      if (cmd.includes("glmproxy") && cmd.includes("cli.js") && pid !== selfPid) hits.push({ pid, cmd });
+    }
+  }
+  return hits;
+}
+
+function runStop() {
+  console.log(`\n  Looking for other glmproxy instances…`);
+  let hits = [];
+  try { hits = findGlmproxyInstances(); }
+  catch (e) { console.log(`  ${COLORS.RED}✗ scan failed: ${e.message}${COLORS.RESET}\n`); return; }
+
+  if (hits.length === 0) {
+    console.log(`  ${COLORS.GRAY}No other instances running.${COLORS.RESET}\n`);
+    return;
+  }
+
+  let killed = 0, failed = 0;
+  for (const { pid, cmd } of hits) {
+    const short = cmd.length > 96 ? `${cmd.slice(0, 96)}…` : cmd;
+    try {
+      process.kill(pid, "SIGTERM");
+      console.log(`  ${COLORS.GREEN}✓${COLORS.RESET} stopped PID ${pid} — ${short}`);
+      killed++;
+    } catch (e) {
+      console.log(`  ${COLORS.RED}✗${COLORS.RESET} PID ${pid} — ${e.code || e.message} — ${short}`);
+      failed++;
+    }
+  }
+  console.log(`\n  ${killed} instance(s) stopped${failed ? `, ${failed} failed` : ""}.\n`);
+}
+
+// --stop / stop: kill other running glmproxy instances, then exit.
+if (args.includes("--stop") || args[0] === "stop") {
+  runStop();
+  process.exit(0);
+}
+
+// --limit: set or clear the max entity / messages limit, then exit.
+if (args.includes("--limit")) {
+  const limitIdx = args.indexOf("--limit");
+  const value = args[limitIdx + 1];
+  if (value && /^\d+$/.test(value)) {
+    const n = parseInt(value, 10);
+    process.env.MAX_MESSAGES = n > 0 ? String(n) : "";
+  }
+  console.log(`\n  Max messages: ${process.env.MAX_MESSAGES ? `${process.env.MAX_MESSAGES} entries` : `${COLORS.GREEN}unlimited${COLORS.RESET}`}`);
+  console.log(`  ${COLORS.GRAY}(If you have a compression system, leaving this unlimited is preferred.)${COLORS.RESET}\n`);
+  process.exit(0);
+}
+
+// --budget: set or clear the hourly account budget, then exit.
+if (args.includes("--budget")) {
+  const budgetIdx = args.indexOf("--budget");
+  const value = args[budgetIdx + 1];
+  if (value && /^\d+$/.test(value)) {
+    process.env.BUDGET_REQUESTS_PER_HOUR = value;
+  }
+  console.log(`\n  Hourly account budget: ${formatBudget()}`);
+  console.log(`  ${COLORS.GRAY}(Anti-ban pacing: warns at 80%, refuses upstream calls at 100%.`);
+  console.log(`   Set BUDGET_REQUESTS_PER_HOUR to apply it to a proxy run; 0 disables the governor.)${COLORS.RESET}\n`);
+  process.exit(0);
+}
+
+// Flag parsing
+let isAnthropic = args.includes("--anthropic");
+const portIdx = args.indexOf("--port");
+const keyIdx = args.indexOf("--key");
+const hostIdx = args.indexOf("--host");
+const rateLimitIdx = args.indexOf("--rate-limit");
+const maxMessagesIdx = args.indexOf("--max-messages");
+
+if (portIdx !== -1 && args[portIdx + 1]) {
+  process.env.PORT = args[portIdx + 1];
+}
+if (keyIdx !== -1 && args[keyIdx + 1]) {
+  process.env.PROXY_KEY = args[keyIdx + 1];
+}
+if (hostIdx !== -1 && args[hostIdx + 1]) {
+  process.env.HOST = args[hostIdx + 1];
+}
+if (rateLimitIdx !== -1 && args[rateLimitIdx + 1]) {
+  process.env.RATE_LIMIT = args[rateLimitIdx + 1];
+}
+if (maxMessagesIdx !== -1 && args[maxMessagesIdx + 1]) {
+  const n = parseInt(args[maxMessagesIdx + 1], 10);
+  process.env.MAX_MESSAGES = n > 0 ? String(n) : "";
+}
+
+const hasFlags = FLAGS.some((f) => args.includes(f));
+
+// ─── Claude Code launch (Anthropic surface) ─────────────────────────────────
+// Claude Code speaks /v1/messages, so the Anthropic surface is the one worth
+// offering a client launch for. The menu is the catalog itself: the id that is
+// picked is what `claude --model <id>` receives, and this proxy resolves it, so
+// the list the operator sees is the list that routes.
+let claudeLaunchModel = null;
+
+async function chooseClaudeLaunchModel(bin, models) {
+  const choices = models.map((m) => ({
+    name: `Launch Claude Code with ${m.id}${m.name && m.name !== m.id ? ` (${m.name})` : ""}`,
+    value: m.id,
+  }));
+  choices.push({
+    name: bin
+      ? "Run the Anthropic gateway only — no client launch"
+      : "Run the Anthropic gateway only — Claude Code is not installed",
+    value: "",
+  });
+  const hint = bin
+    ? `  ${COLORS.GRAY}claude: ${bin} — launched with --model, routed through this proxy${COLORS.RESET}`
+    : `  ${COLORS.GRAY}No claude on PATH. Install: npm i -g @anthropic-ai/claude-code`
+      + ` (or set ${CLAUDE_BIN_ENV} to the binary)${COLORS.RESET}`;
+  return promptSelect({
+    message: "Anthropic surface:",
+    hint,
+    choices,
+    default: bin && models.length ? models[0].id : "",
+  });
+}
+
+// Runs after the gateway is listening. The entrypoint is started in-process by
+// the import at the bottom of this file and `listen()` is asynchronous, so the
+// client waits for a real /healthz answer instead of racing the socket. Every
+// failure path here leaves the gateway up — the operator can always run claude
+// themselves.
+async function runClaudeLaunch({ model, host, port, key }) {
+  const baseUrl = `http://${host}:${port}`;
+  const bin = findClaudeBin();
+  console.log(`\n  ${COLORS.GRAY}Routing Claude Code to ${baseUrl} with model ${model}${COLORS.RESET}`);
+
+  if (!bin) {
+    console.log(`  ${COLORS.RED}✗ claude not found${COLORS.RESET} — install it with ${COLORS.CYAN}npm i -g @anthropic-ai/claude-code${COLORS.RESET},`);
+    console.log(`    or point ${COLORS.CYAN}${CLAUDE_BIN_ENV}${COLORS.RESET} at the binary. The gateway is running either way.\n`);
+    return;
+  }
+
+  const config = loadConfig({ format: "anthropic" });
+  let entry = null;
+  try { entry = getModelCatalog(config).models.find((m) => m.id === model) || null; }
+  catch (_) { entry = null; }
+
+  const settings = buildLaunchSettings({
+    baseUrl,
+    token: key,
+    model,
+    contextWindowTokens: entry?.contextWindow ?? null,
+  });
+
+  // `--settings` outranks the user's and the project's own settings files, which
+  // is the point: a settings.json `env` block beats the exported environment, so
+  // env alone would lose to a stale ANTHROPIC_BASE_URL. Clients that predate the
+  // flag still launch, on the environment alone.
+  const settingsSupported = await detectSettingsFlag({ bin });
+  const settingsFile = settingsSupported ? writeLaunchSettings(config.STATE_DIR, settings) : null;
+  if (!settingsSupported) {
+    console.log(`  ${COLORS.GRAY}This claude predates --settings: routing by environment only, so a`);
+    console.log(`  settings.json ANTHROPIC_BASE_URL would take precedence.${COLORS.RESET}`);
+  } else if (!settingsFile) {
+    console.log(`  ${COLORS.GRAY}Could not write ${LAUNCH_SETTINGS_FILE} into the state dir: routing by environment only.${COLORS.RESET}`);
+  }
+
+  const args = buildLaunchArgs({ model, settingsFile });
+  if (!(await waitForProxy({ baseUrl, token: key }))) {
+    console.log(`  ${COLORS.RED}✗ the gateway did not answer on ${baseUrl} — not launching Claude Code.${COLORS.RESET}\n`);
+    return;
+  }
+
+  console.log(`  ${COLORS.GRAY}${bin} ${args.join(" ")}${COLORS.RESET}\n`);
+  const result = await launchClaude({ bin, args, env: settings.env });
+  if (!result.started) {
+    console.log(`  ${COLORS.RED}✗ could not start claude: ${result.error?.message || "unknown error"}${COLORS.RESET}`);
+    console.log(`    The gateway is still running on ${baseUrl}.\n`);
+    return;
+  }
+  const how = result.code === null || result.code === undefined ? String(result.signal) : `code ${result.code}`;
+  console.log(`\n  ${COLORS.GRAY}claude exited (${how}). The gateway is still running on ${baseUrl} — Ctrl+C to stop it.${COLORS.RESET}\n`);
+}
+
+// Menu (only on a real TTY with no flags)
+if (!hasFlags && process.stdin.isTTY) {
+  for (;;) {
+    const action = await promptSelect({
+      message: "Choose action:",
+      choices: [
+        { name: "Start OpenAI Gateway (/v1/chat/completions)", value: "start_openai" },
+        { name: "Start Anthropic Gateway (/v1/messages)", value: "start_anthropic" },
+        { name: "Set Max Messages Limit (default: unlimited)", value: "limit" },
+        { name: "Set Hourly Account Budget (anti-ban pacing)", value: "budget" },
+        { name: "Run Model Doctor (View catalog & routing)", value: "doctor" },
+        { name: "Test Models (Live proxy health check)", value: "test_models" },
+      ],
+      default: "start_openai",
+    });
+
+    if (action === "doctor") {
+      await runDoctor();
+      const next = await promptSelect({
+        message: "Next action:",
+        choices: [
+          { name: "Test all models now", value: "test" },
+          { name: "Back to main menu", value: "back" },
+        ],
+        default: "test",
+      });
+      if (next === "test") {
+        await runModelTests();
+      }
+      continue;
+    }
+
+    if (action === "test_models") {
+      await runModelTests();
+      continue;
+    }
+
+    if (action === "limit") {
+      const current = Number.isFinite(effectiveMaxMessages())
+        ? `${effectiveMaxMessages()} entries`
+        : `${COLORS.GREEN}unlimited${COLORS.RESET}`;
+      const entityLimit = await promptSelect({
+        message: "Max entity / messages limit:",
+        hint: `  ${COLORS.GRAY}current: ${current} — a compression system makes unlimited preferred${COLORS.RESET}`,
+        choices: [
+          { name: "Unlimited (default)", value: "unlimited" },
+          { name: "128", value: "128" },
+          { name: "256", value: "256" },
+          { name: "512", value: "512" },
+          { name: "1024", value: "1024" },
+        ],
+        default: "unlimited",
+      });
+      process.env.MAX_MESSAGES = entityLimit === "unlimited" ? "" : entityLimit;
+      console.log(`  ${COLORS.GRAY}(If you have a compression system, leaving this unlimited is preferred.)${COLORS.RESET}\n`);
+      continue;
+    }
+
+    if (action === "budget") {
+      const entityBudget = await promptSelect({
+        message: "Hourly upstream budget per account:",
+        hint: `  ${COLORS.GRAY}current: ${formatBudget()} — this is the guard against burning the account into a ban${COLORS.RESET}`,
+        choices: [
+          { name: "300 requests/hour (default)", value: "300" },
+          { name: "600 requests/hour (heavy harness use)", value: "600" },
+          { name: "1000 requests/hour (aggressive)", value: "1000" },
+          { name: "Off — unmetered (0)", value: "0" },
+        ],
+        default: "300",
+      });
+      process.env.BUDGET_REQUESTS_PER_HOUR = entityBudget;
+      console.log(`  ${COLORS.GRAY}Pacing: ${formatBudget()}. Warns at 80%, refuses at 100% with a local 429.${COLORS.RESET}\n`);
+      continue;
+    }
+
+    isAnthropic = action === "start_anthropic";
+    if (isAnthropic) {
+      const bin = findClaudeBin();
+      // Only the ids the proxy actually serves are offered — an arbitrary string
+      // would still reach a model (the alias map falls back to the tier default)
+      // but it would not be the model the operator picked, which is worse than a
+      // shorter menu. Capped so the raw-mode menu stays readable.
+      let launchable = [];
+      try { launchable = getModelCatalog(loadConfig({ format: "anthropic" })).models.slice(0, 12); }
+      catch (_) { launchable = []; }
+      claudeLaunchModel = await chooseClaudeLaunchModel(bin, launchable);
+    }
+    const defaultPort = DEFAULT_PORTS[isAnthropic ? "anthropic" : "openai"];
+    const port = await promptNumber({ message: "Port:", default: defaultPort });
+    const host = await promptInput({ message: "Host:", default: "127.0.0.1" });
+    const key = await promptInput({ message: "Auth key:", default: "akuganteng" });
+
+    process.env.PORT = String(port);
+    process.env.HOST = host;
+    process.env.PROXY_KEY = key;
+    break;
+  }
+}
+
+const targetFile = isAnthropic
+  ? path.join(__dirname, "..", "anthropic.js")
+  : path.join(__dirname, "..", "openai.js");
+
+// Windows dynamic imports need a file:// URL, not a raw drive-letter path
+await import(pathToFileURL(targetFile).href);
+
+// The gateway is listening in this process now; hand the terminal to Claude Code
+// if that is what was chosen. Deliberately after the import, never before: the
+// client dials /v1/messages the moment it starts.
+if (claudeLaunchModel) {
+  await runClaudeLaunch({
+    model: claudeLaunchModel,
+    host: process.env.HOST || DEFAULT_HOST,
+    port: Number(process.env.PORT) || DEFAULT_PORTS.anthropic,
+    key: process.env.PROXY_KEY || DEFAULT_PROXY_KEY,
+  });
+}

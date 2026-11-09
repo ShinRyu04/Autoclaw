@@ -1,0 +1,47 @@
+[
+  {
+    "timestamp": "2026-11-09T05:27:04.893Z",
+    "model": "zai_glm-5.3-flash",
+    "status": 502,
+    "via": "cloud",
+    "last_message": "hi",
+    "message_count": 1,
+    "error": "upstream_connection_failed"
+  },
+  {
+    "timestamp": "2026-11-09T05:27:04.956Z",
+    "model": "zai_glm-5.3-flash",
+    "status": 429,
+    "via": "cloud",
+    "last_message": "hi",
+    "message_count": 1,
+    "error": "key_quota_exceeded"
+  },
+  {
+    "timestamp": "2026-11-09T05:35:08.637Z",
+    "model": "zai_glm-5.3-flash",
+    "status": 502,
+    "via": "cloud",
+    "last_message": "hi",
+    "message_count": 1,
+    "error": "upstream_connection_failed"
+  },
+  {
+    "timestamp": "2026-11-09T05:35:08.715Z",
+    "model": "zai_glm-5.3-flash",
+    "status": 429,
+    "via": "cloud",
+    "last_message": "hi",
+    "message_count": 1,
+    "error": "key_quota_exceeded"
+  },
+  {
+    "timestamp": "2026-11-09T05:35:17.675Z",
+    "model": "x",
+    "status": 503,
+    "via": "cloud",
+    "last_message": "hi",
+    "message_count": 1,
+    "error": "no_api_key"
+  }
+]

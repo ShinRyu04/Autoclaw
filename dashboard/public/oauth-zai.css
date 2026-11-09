@@ -1,0 +1,48 @@
+.oauth-body {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.oauth-card {
+  width: min(460px, 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: clamp(1.1rem, 4vw, 1.6rem);
+}
+
+.oauth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 1.1rem;
+}
+.oauth-brand .brand-mark {
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.68rem;
+}
+
+.oauth-card h1 { font-size: 1.35rem; margin-bottom: 0.5rem; }
+.oauth-copy { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.1rem; }
+.oauth-captcha { min-height: 48px; margin-bottom: 0.6rem; }
+.oauth-button { width: 100%; }
+.oauth-status {
+  min-height: 1.5em;
+  color: var(--muted);
+  font-size: 0.84rem;
+  margin-top: 0.8rem;
+}
+.oauth-status[data-state="ok"] { color: var(--ok); }
+.oauth-status[data-state="err"] { color: var(--err); }
+.oauth-foot {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 1.15rem;
+  padding-top: 0.8rem;
+}

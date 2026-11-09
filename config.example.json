@@ -1,0 +1,20 @@
+{
+  "GLMP_BACKEND": "autoclaw",
+  "ZAI_API_KEY": "",
+  "ZAI_BASE_URL": "https://api.z.ai/api/paas/v4/chat/completions",
+  "ZAI_DEFAULT_MODEL": "zaicoding_glm-5.3",
+  "ZAI_MODEL_OPUS": "zaicoding_glm-5.3",
+  "ZAI_MODEL_SONNET": "zaicoding_glm-5.3",
+  "ZAI_MODEL_HAIKU": "zai_glm-5.3-flash",
+  "BUDGET_REQUESTS_PER_HOUR": 300,
+  "MIN_GAP_MS": 250,
+  "GLMP_QUEUE_MAX_DEPTH": 50,
+  "GLMP_QUEUE_WAIT_MS": 0,
+  "MAX_MESSAGES": 0,
+  "UPSTREAM_TIMEOUT_MS": 300000,
+  "GLMP_THROTTLE_RETRIES": 3,
+  "GLMP_THROTTLE_RETRY_MS": 4000,
+  "HEARTBEAT_INTERVAL_MS": 300000,
+  "GLMP_KEY_WINDOW_HOURS": 1,
+  "GLMP_AUTOCLAW_ACCOUNT": ""
+}

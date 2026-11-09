@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Ringkasan · Autoclaw</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Lewati ke konten</a>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" data-route>
+        <span class="brand-mark" aria-hidden="true"><img src="/autoclaw.png" alt=""></span>
+        <span>
+          <span class="brand-name">Autoclaw</span>
+          <span class="brand-sub">Panel operasi lokal</span>
+        </span>
+      </a>
+
+      <nav class="nav" aria-label="Navigasi utama">
+        <a href="/" data-route>Ringkasan</a>
+        <a href="/accounts" data-route>Akun</a>
+        <a href="/keys" data-route>
+          Kunci
+          <span class="nav-count" id="nav-keys" hidden></span>
+        </a>
+        <a href="/requests" data-route>
+          Request
+          <span class="nav-count" id="nav-queue" hidden></span>
+        </a>
+        <a href="/upstream" data-route>Upstream</a>
+        <a href="/health" data-route>Health</a>
+        <a href="/api-docs" data-route>Dokumentasi API</a>
+        <a href="/settings" data-route>Pengaturan</a>
+        <a href="/logs" data-route>Log</a>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="lang-switch" role="group" aria-label="Language / Bahasa" data-i18n-ignore>
+          <button type="button" data-lang="id" aria-pressed="true">ID</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+
+        <div class="sidebar-foot">
+          <p class="conn">
+            <span class="dot" id="conn-dot" aria-hidden="true"></span>
+            <span id="conn-text" role="status">Menghubungkan ke proxy</span>
+          </p>
+          <div class="foot-account">
+            <span class="foot-avatar" id="foot-initial" aria-hidden="true">–</span>
+            <span class="foot-who">
+              <strong id="foot-account">Membaca akun</strong>
+              <span id="foot-account-sub">–</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="content">
+      <header class="page-head">
+        <div>
+          <h1 id="page-title" tabindex="-1">Ringkasan</h1>
+          <p class="page-desc" id="page-desc">Akun, pemakaian, dan request terakhir.</p>
+        </div>
+        <button type="button" class="btn" id="refresh-all">Muat ulang</button>
+      </header>
+
+      <div id="banner" class="banner" role="alert" hidden>
+        <span id="banner-text"></span>
+        <button type="button" class="btn small" id="banner-retry">Coba lagi</button>
+      </div>
+
+      <main id="main" tabindex="-1">
+        <section class="page" data-page="overview" aria-label="Ringkasan">
+          <div class="stat-grid" aria-label="Ringkasan angka">
+            <article class="stat-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </span>
+                <span class="stat-label">Total akun</span>
+              </div>
+              <p class="stat-value" id="stat-total-accounts">–</p>
+              <p class="stat-note" id="stat-total-accounts-note">siap dipakai</p>
+            </article>
+
+            <article class="stat-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>
+                </span>
+                <span class="stat-label">Akun aktif</span>
+              </div>
+              <p class="stat-value" id="stat-active-accounts">–</p>
+              <p class="stat-note" id="stat-active-accounts-note">dipakai kedua jalur</p>
+            </article>
+
+            <article class="stat-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+                </span>
+                <span class="stat-label">Total poin</span>
+              </div>
+              <p class="stat-value" id="stat-total-points">–</p>
+              <p class="stat-note" id="stat-total-points-note">saldo AutoClaw</p>
+            </article>
+
+            <article class="stat-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
+                </span>
+                <span class="stat-label">Request API</span>
+              </div>
+              <p class="stat-value" id="stat-api-requests">–</p>
+              <p class="stat-note" id="stat-api-requests-note">sejak proxy hidup</p>
+            </article>
+
+            <article class="stat-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></svg>
+                </span>
+                <span class="stat-label">Token terpakai</span>
+              </div>
+              <p class="stat-value" id="stat-tokens-used">–</p>
+              <p class="stat-note" id="stat-tokens-used-note">sejak proxy hidup</p>
+            </article>
+
+            <article class="stat-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h14v4"/><path d="M3 7v10a2 2 0 0 0 2 2h16V9H5a2 2 0 0 1-2-2Z"/><circle cx="16" cy="14" r="1"/></svg>
+                </span>
+                <span class="stat-label">Estimasi biaya</span>
+              </div>
+              <p class="stat-value" id="stat-estimated-cost">–</p>
+              <p class="stat-note" id="stat-estimated-cost-note">tidak dilacak upstream</p>
+            </article>
+          </div>
+
+          <article class="card overview-accounts">
+            <div class="card-head">
+              <div>
+                <h2>Akun</h2>
+                <p class="section-note" id="overview-accounts-note">Memuat akun.</p>
+              </div>
+              <div class="actions">
+                <button type="button" class="btn small primary" id="overview-checkin">Check-in semua</button>
+                <a class="btn small" href="/accounts" data-route>Kelola</a>
+              </div>
+            </div>
+            <ul class="overview-account-list" id="overview-accounts-list"></ul>
+            <p class="empty" id="overview-accounts-empty" hidden>Belum ada akun. Tambah akun lewat Login Z.ai.</p>
+            <p class="note" id="overview-checkin-status" role="status"></p>
+          </article>
+
+          <div class="overview-bottom">
+            <article class="card">
+              <div class="card-head">
+                <h2>Request terakhir</h2>
+                <a class="link" href="/requests" data-route>Semua request</a>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <caption class="visually-hidden">Delapan request terakhir dari kedua jalur</caption>
+                  <thead>
+                    <tr><th scope="col">Waktu</th><th scope="col">Jalur</th><th scope="col">Status</th><th scope="col">Model</th><th scope="col">Latensi</th></tr>
+                  </thead>
+                  <tbody id="overview-requests"></tbody>
+                </table>
+              </div>
+              <p class="empty" id="overview-requests-empty" hidden>Belum ada request di jendela proses ini. Kirim satu request lewat salah satu jalur.</p>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <h2>Tekanan kuota kunci</h2>
+                <a class="link" href="/keys" data-route>Kelola kunci</a>
+              </div>
+              <ul class="pressure" id="key-pressure"></ul>
+              <p class="empty" id="key-pressure-empty" hidden>Belum ada kunci klien. Tambah kunci kalau ada klien yang perlu akses terpisah.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page="upstream" aria-label="Upstream" hidden>
+          <article class="card capacity">
+            <div class="card-head">
+              <h2>Kapasitas jam ini</h2>
+              <span id="gov-state" class="state">memuat</span>
+            </div>
+            <p class="capacity-number"><strong id="budget-used">–</strong><span id="budget-limit">/ – request</span></p>
+            <div class="meter" id="budget-meter" role="progressbar" aria-label="Pemakaian budget per jam" aria-valuemin="0" aria-valuemax="300" aria-valuenow="0">
+              <div class="meter-fill" id="budget-fill"></div>
+            </div>
+            <dl class="capacity-meta">
+              <div><dt>Reset jendela</dt><dd id="budget-reset">–</dd></div>
+              <div><dt>Antrean</dt><dd><span id="queue-text">–</span></dd></div>
+              <div><dt>Jeda kirim</dt><dd id="min-gap">–</dd></div>
+            </dl>
+            <p class="note" id="capacity-note">Membaca status governor.</p>
+          </article>
+
+          <div class="section-head">
+            <h2>Jalur upstream</h2>
+            <span class="section-note">Satu akun, dua format. Status dibaca dari <code>/status</code> masing-masing proses.</span>
+          </div>
+          <div class="lanes">
+            <article class="card lane" id="lane-openai">
+              <div class="card-head">
+                <h3>OpenAI <span class="muted" data-field="port">:18791</span></h3>
+                <span class="state" data-field="state">memuat</span>
+              </div>
+              <dl class="lane-facts">
+                <div><dt>Token</dt><dd data-field="token">–</dd></div>
+                <div><dt>Proses</dt><dd data-field="runtime">–</dd></div>
+                <div><dt>Request terakhir</dt><dd data-field="last">–</dd></div>
+                <div><dt>Error</dt><dd data-field="errors">–</dd></div>
+              </dl>
+            </article>
+            <article class="card lane" id="lane-anthropic">
+              <div class="card-head">
+                <h3>Anthropic <span class="muted" data-field="port">:18792</span></h3>
+                <span class="state" data-field="state">memuat</span>
+              </div>
+              <dl class="lane-facts">
+                <div><dt>Token</dt><dd data-field="token">–</dd></div>
+                <div><dt>Proses</dt><dd data-field="runtime">–</dd></div>
+                <div><dt>Request terakhir</dt><dd data-field="last">–</dd></div>
+                <div><dt>Error</dt><dd data-field="errors">–</dd></div>
+              </dl>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page="api-docs" aria-label="Dokumentasi API" hidden>
+          <div class="docs-grid">
+            <article class="card">
+              <div class="card-head">
+                <h2>OpenAI</h2>
+                <span class="badge">chat completions</span>
+              </div>
+              <p class="docs-label">Base URL</p>
+              <p class="docs-code" id="docs-openai-base">–</p>
+              <p class="docs-label">Header autentikasi</p>
+              <p class="docs-code" id="docs-openai-auth">–</p>
+            </article>
+            <article class="card">
+              <div class="card-head">
+                <h2>Anthropic</h2>
+                <span class="badge">messages</span>
+              </div>
+              <p class="docs-label">Base URL</p>
+              <p class="docs-code" id="docs-anthropic-base">–</p>
+              <p class="docs-label">Header autentikasi</p>
+              <p class="docs-code" id="docs-anthropic-auth">–</p>
+            </article>
+          </div>
+
+          <div class="section-head">
+            <h2>Endpoint</h2>
+            <span class="section-note">Semua endpoint memakai kunci operator atau kunci klien dari halaman Kunci.</span>
+          </div>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Tabel endpoint">
+            <table>
+              <thead>
+                <tr><th scope="col">Metode</th><th scope="col">Jalur</th><th scope="col">Lane</th><th scope="col">Keterangan</th></tr>
+              </thead>
+              <tbody id="docs-endpoints"></tbody>
+            </table>
+          </div>
+
+          <div class="section-head">
+            <h2>Model</h2>
+            <span class="section-note" id="docs-model-source">Membaca katalog model.</span>
+          </div>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Tabel model">
+            <table>
+              <thead>
+                <tr><th scope="col">ID model</th><th scope="col">Nama</th><th scope="col">Context window</th><th scope="col">Output maksimum</th></tr>
+              </thead>
+              <tbody id="docs-models"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="docs-models-empty" hidden>Katalog model tidak terbaca. Jalankan proxy lalu muat ulang halaman.</p>
+          <p class="note docs-alias" id="docs-aliases">Alias Anthropic: –</p>
+
+          <article class="card docs-example">
+            <div class="card-head">
+              <h2>Contoh request</h2>
+              <button type="button" class="btn small" id="docs-copy-example">Salin contoh</button>
+            </div>
+            <pre class="code-block" id="docs-example">Memuat contoh.</pre>
+          </article>
+        </section>
+
+        <section class="page" data-page="health" aria-label="Health" hidden>
+          <div class="section-head">
+            <div>
+              <h2>Kesehatan akun</h2>
+              <p class="section-note" id="health-summary">Periksa token dan saldo semua akun AutoClaw yang terdeteksi.</p>
+            </div>
+            <button type="button" class="btn primary" id="health-run">Periksa akun</button>
+          </div>
+          <p class="form-error" id="health-error" role="alert" hidden></p>
+          <ul class="account-list" id="health-list"></ul>
+          <p class="empty" id="health-empty" hidden>
+            <span>Belum ada akun untuk diperiksa.</span>
+            <span>Tambahkan akun lewat halaman Akun, lalu jalankan pemeriksaan.</span>
+          </p>
+        </section>
+
+        <section class="page" data-page="accounts" aria-label="Akun" hidden>
+          <div class="section-head">
+            <div>
+              <h2>Akun AutoClaw</h2>
+              <p class="section-note">Akun dashboard disimpan terenkripsi di mesin ini dan bisa dipakai tanpa membuka AutoClaw. Akun vault tetap dibaca dari AutoClaw. Token tidak pernah dikirim ke halaman ini.</p>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn" id="accounts-refresh">Muat ulang</button>
+              <button type="button" class="btn" id="accounts-auto">Ikuti vault</button>
+              <button type="button" class="btn primary" id="add-account">Tambah akun</button>
+            </div>
+          </div>
+
+          <article class="card active-account" id="active-account">
+            <div class="active-account-main">
+              <span class="account-avatar" id="active-account-initial" aria-hidden="true">–</span>
+              <div>
+                <p class="eyebrow">Akun aktif</p>
+                <h3 id="active-account-name">Membaca akun</h3>
+                <p class="account-sub" id="active-account-sub">–</p>
+              </div>
+            </div>
+            <dl class="active-account-facts">
+              <div><dt>ID</dt><dd id="active-account-id">–</dd></div>
+              <div><dt>Backend</dt><dd id="active-account-backend">–</dd></div>
+              <div><dt>Token</dt><dd id="active-account-state">–</dd></div>
+            </dl>
+            <p class="note" id="active-account-note">Memuat akun dari vault.</p>
+          </article>
+
+          <div class="section-head">
+            <h2>Semua akun</h2>
+            <span class="section-note" id="accounts-count">–</span>
+          </div>
+          <ul class="account-list" id="accounts-list"></ul>
+          <p class="empty" id="accounts-empty" hidden>
+            <span>Belum ada akun AutoClaw yang bisa dipakai.</span>
+            <span>Tambah akun lewat Login Z.ai, lalu muat ulang daftar.</span>
+          </p>
+          <p class="form-error" id="accounts-error" role="alert" hidden></p>
+          <p class="note" id="accounts-status" role="status"></p>
+        </section>
+
+        <section class="page" data-page="keys" aria-label="Kunci klien" hidden>
+          <div class="section-head">
+            <div>
+              <h2>Kunci klien</h2>
+              <p class="section-note">Kunci operator (<code>PROXY_KEY</code>) selalu diterima tanpa kuota sendiri. Baris di bawah berasal dari <code>keys.json</code>.</p>
+            </div>
+            <button type="button" class="btn primary" id="add-key">Tambah kunci</button>
+          </div>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Tabel kunci klien">
+            <table>
+              <caption class="visually-hidden">Kunci klien dan pemakaian kuotanya</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Nama</th>
+                  <th scope="col">Kunci</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Kuota jam ini</th>
+                  <th scope="col">Total</th>
+                  <th scope="col">Terakhir dipakai</th>
+                  <th scope="col">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="keys-body"></tbody>
+            </table>
+          </div>
+          <div class="empty" id="keys-empty" hidden>
+            <p>Belum ada kunci klien.</p>
+            <p>Buat satu kunci per klien supaya kuota dan pemakaiannya bisa dipisah.</p>
+            <button type="button" class="btn primary" id="add-key-empty">Tambah kunci pertama</button>
+          </div>
+        </section>
+
+        <section class="page" data-page="requests" aria-label="Request" hidden>
+          <div class="section-head">
+            <h2>Request terakhir</h2>
+            <span class="section-note" id="requests-range">–</span>
+          </div>
+          <div class="outcome-strip" id="outcome-strip" aria-hidden="true"></div>
+          <p class="legend" id="outcome-legend">Belum ada request tercatat.</p>
+
+          <div class="toolbar">
+            <span class="toolbar-label" id="filter-label">Tampilkan</span>
+            <div class="segmented" role="group" aria-labelledby="filter-label">
+              <button type="button" class="seg" data-filter="all" aria-pressed="true">Semua</button>
+              <button type="button" class="seg" data-filter="ok" aria-pressed="false">Sukses</button>
+              <button type="button" class="seg" data-filter="warn" aria-pressed="false">Rate limit</button>
+              <button type="button" class="seg" data-filter="err" aria-pressed="false">Error</button>
+            </div>
+          </div>
+
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Tabel request terakhir">
+            <table>
+              <caption class="visually-hidden">Request terakhir dari kedua jalur</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Waktu</th><th scope="col">Jalur</th><th scope="col">Kunci</th>
+                  <th scope="col">Model</th><th scope="col">Status</th><th scope="col">Latensi</th><th scope="col">Error</th>
+                </tr>
+              </thead>
+              <tbody id="requests-body"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="requests-empty" hidden>Belum ada request di jendela proses ini. Kirim satu request lewat salah satu jalur.</p>
+          <p class="empty" id="requests-filtered-empty" hidden>Tidak ada request dengan status ini di jendela sekarang. Pilih Semua untuk melihat yang lain.</p>
+        </section>
+
+        <section class="page" data-page="settings" aria-label="Pengaturan" hidden>
+          <form id="settings-form">
+            <div class="settings-grid">
+              <fieldset>
+                <legend>Backend</legend>
+                <div class="field">
+                  <label for="GLMP_BACKEND">Sumber upstream</label>
+                  <select id="GLMP_BACKEND" name="GLMP_BACKEND">
+                    <option value="autoclaw">AutoClaw (vault token)</option>
+                    <option value="zai">Z.ai (API key langsung)</option>
+                  </select>
+                  <p class="hint">Mengubah backend butuh key Z.ai yang valid sebelum request berikutnya.</p>
+                </div>
+                <div class="field">
+                  <label for="ZAI_API_KEY">Z.ai API key</label>
+                  <input id="ZAI_API_KEY" name="ZAI_API_KEY" type="password" autocomplete="off" spellcheck="false" placeholder="Tidak diubah">
+                  <p class="hint" id="zai-key-hint">Hanya dikirim saat diisi. Tidak pernah ditampilkan kembali.</p>
+                </div>
+                <div class="field">
+                  <label for="ZAI_BASE_URL">Z.ai base URL</label>
+                  <input id="ZAI_BASE_URL" name="ZAI_BASE_URL" type="url" spellcheck="false" placeholder="https://api.z.ai/api/paas/v4/chat/completions">
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Batas akun</legend>
+                <div class="field">
+                  <label for="BUDGET_REQUESTS_PER_HOUR">Budget request per jam</label>
+                  <input id="BUDGET_REQUESTS_PER_HOUR" name="BUDGET_REQUESTS_PER_HOUR" type="number" min="0" max="100000" step="1">
+                  <p class="hint">0 mematikan pacing. Governor tetap menolak saat budget habis.</p>
+                </div>
+                <div class="field">
+                  <label for="MIN_GAP_MS">Jeda minimum antar kirim (ms)</label>
+                  <input id="MIN_GAP_MS" name="MIN_GAP_MS" type="number" min="0" max="60000" step="10">
+                </div>
+                <div class="field">
+                  <label for="UPSTREAM_TIMEOUT_MS">Timeout upstream (ms)</label>
+                  <input id="UPSTREAM_TIMEOUT_MS" name="UPSTREAM_TIMEOUT_MS" type="number" min="1000" max="600000" step="1000">
+                </div>
+                <div class="field">
+                  <label for="MAX_MESSAGES">Maksimum pesan per request</label>
+                  <input id="MAX_MESSAGES" name="MAX_MESSAGES" type="number" min="1" max="100000" step="1">
+                  <p class="hint">Kosong berarti tanpa batas.</p>
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Antrean</legend>
+                <div class="field">
+                  <label for="GLMP_QUEUE_MAX_DEPTH">Kedalaman antrean</label>
+                  <input id="GLMP_QUEUE_MAX_DEPTH" name="GLMP_QUEUE_MAX_DEPTH" type="number" min="1" max="1000" step="1">
+                  <p class="hint">Penuh menghasilkan <code>429 queue_overflow</code>.</p>
+                </div>
+                <div class="field">
+                  <label for="GLMP_QUEUE_WAIT_MS">Batas tunggu antrean (ms)</label>
+                  <input id="GLMP_QUEUE_WAIT_MS" name="GLMP_QUEUE_WAIT_MS" type="number" min="0" max="3600000" step="1000">
+                  <p class="hint">0 berarti menunggu tanpa batas.</p>
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Kuota kunci</legend>
+                <div class="field">
+                  <label for="GLMP_KEY_WINDOW_HOURS">Jendela kuota kunci (jam)</label>
+                  <input id="GLMP_KEY_WINDOW_HOURS" name="GLMP_KEY_WINDOW_HOURS" type="number" min="0.1" max="168" step="0.1">
+                  <p class="hint">Sliding window untuk <code>requestsPerHour</code> tiap kunci.</p>
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Throttle dan heartbeat</legend>
+                <div class="field">
+                  <label for="GLMP_THROTTLE_RETRIES">Retry throttle</label>
+                  <input id="GLMP_THROTTLE_RETRIES" name="GLMP_THROTTLE_RETRIES" type="number" min="0" max="10" step="1">
+                </div>
+                <div class="field">
+                  <label for="GLMP_THROTTLE_RETRY_MS">Jeda retry throttle (ms)</label>
+                  <input id="GLMP_THROTTLE_RETRY_MS" name="GLMP_THROTTLE_RETRY_MS" type="number" min="0" max="60000" step="100">
+                </div>
+                <div class="field">
+                  <label for="HEARTBEAT_INTERVAL_MS">Interval heartbeat (ms)</label>
+                  <input id="HEARTBEAT_INTERVAL_MS" name="HEARTBEAT_INTERVAL_MS" type="number" min="0" max="86400000" step="1000">
+                  <p class="hint">0 mematikan heartbeat AutoClaw.</p>
+                </div>
+              </fieldset>
+            </div>
+
+            <div class="save-bar">
+              <button type="submit" class="btn primary" id="settings-submit">Simpan dan muat ulang</button>
+              <span id="settings-status" role="status"></span>
+              <span class="hint">Tersimpan ke <code id="config-path">config.json</code>. Port, host, dan <code>PROXY_KEY</code> tetap butuh restart.</span>
+            </div>
+          </form>
+        </section>
+
+        <section class="page" data-page="logs" aria-label="Log" hidden>
+          <div class="toolbar log-toolbar">
+            <div class="field inline">
+              <label for="log-file">Berkas</label>
+              <select id="log-file"></select>
+            </div>
+            <button type="button" class="btn" id="refresh-logs">Muat ulang</button>
+            <label class="check">
+              <input type="checkbox" id="log-follow" checked>
+              Ikuti ujung
+            </label>
+          </div>
+          <pre id="log-view" tabindex="0" aria-label="Isi log">Pilih berkas log.</pre>
+        </section>
+      </main>
+
+      <footer class="page-foot">
+        <p>Data dari endpoint <code>/status</code> kedua jalur. Panel ini hanya loopback.</p>
+      </footer>
+    </div>
+  </div>
+
+  <dialog id="account-dialog" aria-labelledby="account-dialog-title">
+    <h2 id="account-dialog-title">Tambah akun AutoClaw</h2>
+    <p class="dialog-text">Token disimpan terenkripsi di mesin ini; browser tidak pernah menerima token.</p>
+
+    <div class="oauth-callout">
+      <div>
+        <strong>Login dengan Z.ai</strong>
+        <p class="hint">Buka tab login, selesaikan captcha, lalu masuk. Akun tersimpan otomatis setelah callback.</p>
+      </div>
+      <button type="button" class="btn primary" id="zai-login">Buka login Z.ai</button>
+    </div>
+
+    <p class="hint" id="account-login-status" role="status" aria-live="polite"></p>
+    <p class="hint">Tambah akun hanya lewat OAuth Z.ai.</p>
+    <div class="form-actions">
+      <button type="button" class="btn" id="account-reload-now">Muat ulang daftar</button>
+      <button type="button" class="btn" id="account-dialog-close">Tutup</button>
+    </div>
+  </dialog>
+
+  <dialog id="key-dialog" aria-labelledby="key-dialog-title">
+    <form id="key-form" method="dialog">
+      <h2 id="key-dialog-title">Tambah kunci klien</h2>
+      <div class="field">
+        <label for="key-name">Nama</label>
+        <input id="key-name" name="name" type="text" maxlength="60" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="key-model">Pin model (opsional)</label>
+        <input id="key-model" name="model" type="text" maxlength="120" spellcheck="false" list="model-options" placeholder="contoh: zai_glm-5.3-flash">
+        <datalist id="model-options"></datalist>
+      </div>
+      <div class="field">
+        <label for="key-rate">Kuota request per jam (0 = tanpa batas)</label>
+        <input id="key-rate" name="requestsPerHour" type="number" min="0" max="100000" step="1" value="0">
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Buat kunci</button>
+        <button type="button" class="btn" id="key-cancel">Batal</button>
+      </div>
+      <div id="key-result" class="key-result" hidden>
+        <p>Kunci dibuat. Salin sekarang, nilainya tidak ditampilkan lagi.</p>
+        <div class="key-copy">
+          <code id="key-value"></code>
+          <button type="button" class="btn" id="key-copy">Salin</button>
+        </div>
+      </div>
+      <p id="key-error" class="form-error" role="alert" hidden></p>
+    </form>
+  </dialog>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

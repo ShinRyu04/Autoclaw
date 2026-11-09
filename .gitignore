@@ -1,0 +1,8 @@
+node_modules/
+logs/
+config.json
+keys.json
+keys-usage.json
+.tmp-test/
+.tmp-zai/
+proxy-state/

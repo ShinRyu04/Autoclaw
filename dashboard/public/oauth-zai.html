@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Login Z.ai · Autoclaw</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/oauth-zai.css">
+</head>
+<body class="oauth-body">
+  <main class="oauth-card">
+    <p class="oauth-brand"><span class="brand-mark" aria-hidden="true"><img src="/autoclaw.png" alt=""></span> Autoclaw</p>
+    <h1>Hubungkan akun Z.ai</h1>
+    <p class="oauth-copy">Selesaikan verifikasi captcha, lalu masuk dengan akun Z.ai. Token dikirim ke dashboard lokal dan tidak ditampilkan di browser.</p>
+
+    <div id="captcha-zone" class="oauth-captcha"></div>
+    <button type="button" class="btn primary oauth-button" id="captcha-btn" disabled>Memuat verifikasi...</button>
+    <p class="oauth-status" id="status" role="status">Membaca konfigurasi captcha.</p>
+
+    <p class="oauth-foot">Login memakai OAuth resmi Z.ai. Tab ini menutup sendiri setelah akun tersimpan.</p>
+  </main>
+
+  <script src="/oauth-zai.js"></script>
+</body>
+</html>
