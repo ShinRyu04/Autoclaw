@@ -684,14 +684,17 @@ macOS.
 
 ## Releases
 
-The latest release is **v1.1.0**:
+The latest release is **v1.1.1**:
 
-- [Release notes and source archives](https://github.com/ShinRyu04/Autoclaw/releases/tag/v1.1.0)
+- [Release notes and downloads](https://github.com/ShinRyu04/Autoclaw/releases/tag/v1.1.1)
 - [All releases](https://github.com/ShinRyu04/Autoclaw/releases)
 
-Release archives contain source only. There is no installer and no prebuilt
-binary; run `npm run check`, then start the watchdog or the three processes
-directly.
+Release archives include the source, a bundled Node.js runtime, and a
+platform launcher for Windows, Linux, and macOS (x64 and arm64). Windows users
+run `start-autoclaw.cmd`; Linux and macOS users run `./start-autoclaw.sh`.
+Each release also ships a `SHA256SUMS` file. The archives are portable bundles,
+not installers; AutoClaw vault accounts still need the AutoClaw desktop app for
+the current OS user.
 
 To update an existing checkout:
 

@@ -1,9 +1,11 @@
 node_modules/
+dist/
 logs/
 config.json
 keys.json
 keys-usage.json
 .tmp-test/
+.tmp-release-test/
 .tmp-zai/
 proxy-state/
 proxy_requests*.json
