@@ -32,6 +32,11 @@ import {
 } from "../lib/account-store.js";
 import { generateKey, maskKey, readKeys, writeKeys } from "../lib/keystore.js";
 import * as keyusage from "../lib/keyusage.js";
+import {
+  identityPost, identityBase, identityFailure as identityFailureError,
+  signedAutoClawHeaders as sharedSignedHeaders,
+  signedAutoClawPost as sharedSignedPost, identityError,
+} from "../lib/identity-client.js";
 
 const ROOT = projectRoot();
 const PUBLIC_DIR = path.join(ROOT, "dashboard", "public");
@@ -41,7 +46,6 @@ const DASHBOARD_PORT = parseInt(process.env.DASHBOARD_PORT || "18793", 10) || 18
 const OPENAI_PORT = parseInt(process.env.OPENAI_PORT || "18791", 10) || 18791;
 const ANTHROPIC_PORT = parseInt(process.env.ANTHROPIC_PORT || "18792", 10) || 18792;
 const CREDITS_URL = "https://autoglm-api.autoglm.ai/agent-assetmgr/api/v2/wallets?biz_app_id=autoclaw";
-const IDENTITY_BASE = "https://autoglm-api.autoglm.ai";
 const CREDITS_TTL_MS = 5 * 60 * 1000;
 const creditsCache = new Map();
 
@@ -52,8 +56,6 @@ const CHECKIN_TASKS = [
   { id: "newbie_local_lobster", label: "Local Lobster" },
 ];
 
-const AUTOCLAW_APP_ID = "100003";
-const AUTOCLAW_APP_KEY = "38d2391985e2369a5fb8227d8e6cd5e5";
 const OAUTH_CALLBACK_PORTS = [18432, 19654, 19723, 53699];
 const oauthSessions = new Map();
 const health = { running: false, startedAt: null, finishedAt: null, results: [], error: "" };
@@ -324,82 +326,25 @@ function listAutoClawAccounts() {
 }
 
 function accountError(message, status = 400) {
-  return Object.assign(new Error(message), { status });
+  return identityError(message, status);
 }
 
+// Thin delegates to lib/identity.js — one copy of the signing facts and the
+// failure-code map lives there; the dashboard keeps its Indonesian wrapper.
 async function identityRequest(pathname, payload) {
-  let res;
-  try {
-    res = await fetch(`${IDENTITY_BASE}${pathname}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch (err) {
-    throw accountError(`Tidak bisa menghubungi AutoClaw: ${err.message}`, 502);
-  }
-  const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); }
-  catch { throw accountError("Respons login AutoClaw bukan JSON", 502); }
-  if (!body || typeof body.code !== "number") throw accountError("Respons login AutoClaw tidak dikenal", 502);
-  return { httpStatus: res.status, body };
+  return identityPost(pathname, payload);
 }
 
 function identityFailure(body) {
-  const messages = {
-    400001: "Data login tidak valid",
-    400002: "AutoClaw menolak permintaan login (middleware)",
-    630006: "Nomor HP tidak valid",
-    630201: "Kode salah",
-    630202: "Kode kedaluwarsa, minta kode baru",
-    630203: "Terlalu banyak percobaan, tunggu sebentar",
-  };
-  const status = body.code === 429 || body.code === 630203 ? 429 : 400;
-  return accountError(messages[body.code] || `Login AutoClaw gagal (kode ${body.code})`, status);
+  return identityFailureError(body);
 }
 
 function signedAutoClawHeaders() {
-  const now = String(Math.floor(Date.now() / 1000));
-  const authSign = crypto.createHash("md5")
-    .update(`${AUTOCLAW_APP_ID}&${now}&${AUTOCLAW_APP_KEY}`)
-    .digest("hex");
-  return {
-    "Content-Type": "application/json",
-    Accept: "*/*",
-    "X-Auth-Appid": AUTOCLAW_APP_ID,
-    "X-Auth-TimeStamp": now,
-    "X-Auth-Sign": authSign,
-    "X-Tm": process.platform === "win32" ? "win" : "linux",
-    "X-Version": "1.17.9",
-    "X-Product": "autoclaw",
-    "X-Channel": "official",
-    "X-Lang": "en",
-    "X-Client-Type": "pc",
-    "X-Trace-Id": crypto.randomUUID(),
-    "User-Agent": "AutoClaw/1.17.9",
-  };
+  return sharedSignedHeaders();
 }
 
 async function signedAutoClawPost(pathname, payload) {
-  let res;
-  try {
-    res = await fetch(`${IDENTITY_BASE}${pathname}`, {
-      method: "POST",
-      headers: signedAutoClawHeaders(),
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(20000),
-    });
-  } catch (err) {
-    throw accountError(`Tidak bisa menghubungi AutoClaw: ${err.message}`, 502);
-  }
-  const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); }
-  catch { throw accountError("Respons AutoClaw bukan JSON", 502); }
-  if (!body || typeof body.code !== "number") throw accountError("Respons AutoClaw tidak dikenal", 502);
-  return { httpStatus: res.status, body };
+  return sharedSignedPost(pathname, payload);
 }
 
 async function zaiCaptchaConfig(force = false) {
@@ -624,7 +569,7 @@ async function completeAutoClawTask(token, taskId) {
   delete headers.Accept;
   let res;
   try {
-    res = await fetch(`${IDENTITY_BASE}/autoclaw-proxy/proxy/autoclaw-task-complete`, {
+    res = await fetch(`${identityBase()}/autoclaw-proxy/proxy/autoclaw-task-complete`, {
       method: "POST",
       headers,
       body: JSON.stringify({ task_id: taskId }),

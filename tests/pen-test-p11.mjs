@@ -90,6 +90,11 @@ async function withCase(options, env, fn) {
   const proxyEnv = {
     HOME: home, USERPROFILE: home,
     OPENCLAW_STATE_DIR: legacyDir,
+    // The dashboard managed-account store lives at repo/proxy-state by default,
+    // independent of HOME. Without this the developer's real active account
+    // short-circuits loadToken() before the vault/legacy legs these cases
+    // assert on — so the store is pointed at the throwaway home too.
+    GLMP_STATE_DIR: path.join(home, "proxy-state"),
     UPSTREAM_HOST: "127.0.0.1", UPSTREAM_PORT: String(port),
     AUTOCLAW_USER_DATA_ROOT: options.withVault !== false ? userData : path.join(userData, "empty"),
     LOG_LEVEL: "info",

@@ -200,6 +200,11 @@ forwarding. With the guard off, the unmodified prompt is rejected on 2.x. The
 system quarantine (`GLMP_SYSTEM_QUARANTINE`, on by default) catches that `406`,
 moves the harness text to user scope and retries immediately.
 
+Upstream 4.x requires the account JWT in **both** `Authorization` and
+`X-Authorization` (same value). `X-Authorization` alone is answered with a bare
+`406`; `Authorization` alone with `401 {"error":"Invalid token"}`. The proxy
+sends both on every chat completion.
+
 ```sh
 claude -p "Explain the codebase architecture"
 ```
@@ -523,8 +528,19 @@ callback on one of the official loopback ports: `18432`, `19654`, `19723` or
 - On Windows the store is encrypted with DPAPI for the current user.
 - On POSIX it uses AES-256-GCM with `proxy-state/managed-accounts.key`
   (mode `0600`).
-- Dashboard accounts refresh their own Z.ai OAuth token every ten minutes and
-  do not silently fall back to another account when refresh fails.
+- Dashboard accounts refresh their own Z.ai OAuth token every ten minutes. A
+  refresh hiccup alone never switches accounts.
+- **Automatic failover on account death**: when the upstream answers with a
+  ban verdict (code `410004`, the `账号已被封禁` ban text, or the live
+  `403 {"error":"账号不可用"}` refusal) or session death (`410000`), the
+  gateway immediately probes the other dashboard accounts —
+  freshest stored token first — through the normal refresh chain, activates
+  the first healthy one, and drops the token cache so the next request runs
+  on the new account. Accounts that fail the probe (banned) are skipped for
+  ten minutes. If every candidate fails, the request is answered exactly as
+  before and the gateway stays on the current account. Rotation on healthy
+  accounts is deliberately not implemented — switching upstream identities
+  for non-death reasons is a ban risk.
 - Vault accounts are read from AutoClaw and disappear from the list when they
   have no credentials.
 - Credits are read from the AutoClaw wallets endpoint and cached for five
@@ -684,17 +700,29 @@ macOS.
 
 ## Releases
 
-The latest release is **v1.1.1**:
+The latest release is **v1.1.2**:
 
-- [Release notes and downloads](https://github.com/ShinRyu04/Autoclaw/releases/tag/v1.1.1)
+- [Release notes and downloads](https://github.com/ShinRyu04/Autoclaw/releases/tag/v1.1.2)
 - [All releases](https://github.com/ShinRyu04/Autoclaw/releases)
 
-Release archives include the source, a bundled Node.js runtime, and a
-platform launcher for Windows, Linux, and macOS (x64 and arm64). Windows users
-run `start-autoclaw.cmd`; Linux and macOS users run `./start-autoclaw.sh`.
-Each release also ships a `SHA256SUMS` file. The archives are portable bundles,
-not installers; AutoClaw vault accounts still need the AutoClaw desktop app for
-the current OS user.
+Release archives are compiled executables (Node.js SEA), one set per platform
+and architecture for Windows, Linux, and macOS (x64 and arm64):
+`autoclaw-openai`, `autoclaw-anthropic`, `autoclaw-dashboard`. No Node.js
+install or source tree is needed. Windows users run `start-autoclaw.cmd`;
+Linux and macOS users run `./start-autoclaw.sh`. `package.json`,
+`fallback-models.json` and `dashboard/public/` ship alongside the binaries
+because the lanes read them at runtime. Each release also ships a
+`SHA256SUMS` file. The archives are portable, not installers; AutoClaw vault
+accounts still need the AutoClaw desktop app for the current OS user.
+
+Building locally (native host only, needs `npm ci` first):
+
+```sh
+node scripts/package-release.mjs --platform windows --arch x64 --compiled
+node scripts/package-release.mjs --platform linux --arch arm64 --compiled
+```
+
+Drop `--compiled` to produce the older source-plus-Node-runtime bundle.
 
 To update an existing checkout:
 

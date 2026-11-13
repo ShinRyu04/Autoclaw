@@ -38,6 +38,7 @@ import { createAuth } from "./lib/auth.js";
 import { createMetrics } from "./lib/metrics.js";
 import { makeStatusHandler, makeStatsHandler } from "./lib/status.js";
 import { reloadConfig } from "./lib/reload.js";
+import { isDeathBody, maybeFailover } from "./lib/failover.js";
 
 // Config (per-format log filenames come from `format`)
 const config = loadConfig({ format: "anthropic" });
@@ -51,6 +52,9 @@ const getToken = config.BACKEND === "zai"
       return config.ZAI_API_KEY;
     }
   : tokenLayer.getToken;
+const peekToken = config.BACKEND === "zai"
+  ? () => config.ZAI_API_KEY || null
+  : tokenLayer.peekToken;
 const auth = createAuth(config, log);
 const metrics = createMetrics();
 globalInFlightQueue.configure({ maxDepth: config.QUEUE_MAX_DEPTH, waitTimeoutMs: config.QUEUE_WAIT_MS });
@@ -83,7 +87,7 @@ installShutdownHooks(config, log);
 // Account pacing governor (Requirement 3) — same one-window-per-account guard
 // as openai.js, keyed on the JWT `user_id`. Placed before the transport so a
 // refused request never opens an upstream socket.
-const governor = getPacingGovernor(config, log, { getToken });
+const governor = getPacingGovernor(config, log, { getToken, peekToken });
 
 // Upstream `Retry-After` (delay-seconds or an HTTP date) → milliseconds, for
 // the governor's bounded backoff.
@@ -113,7 +117,7 @@ let tierTargets = config.BACKEND === "zai"
 async function refreshTiers() {
   if (config.BACKEND === "zai") return;
   let jwt = null;
-  try { jwt = getToken(); } catch { return; } // no token yet — heuristics only
+  try { jwt = await getToken(); } catch { return; } // no token yet — heuristics only
   const remote = await fetchRemoteModelConfig(config, jwt);
   if (!remote) return;
   tierTargets = resolveTierTargets(annotateCreditTiers(getModelCatalog(config).models, remote));
@@ -344,6 +348,15 @@ async function handleMessages(req, res) {
     // picks up the fresh JWT regardless of who serves this one.
     if (statusCode === 401) invalidateAuth();
 
+    // Account death (upstream ban 410004 / session death 410000): switch to
+    // the healthiest managed account now so the NEXT request does not fail
+    // the same way. Fires only on these body codes — never on refresh
+    // hiccups, throttles, or any other upstream error.
+    if (isDeathBody(statusCode, upstreamErrBody)) {
+      const switched = await maybeFailover("upstream-ban", log, { currentToken: peekToken?.() ?? null });
+      if (switched) invalidateAuth();
+    }
+
     // Failure path only — a 2xx falls through to the success renderer below.
     if (statusCode >= 400) {
       releaseOnce();
@@ -499,7 +512,7 @@ const server = createGatewayServer({
 
 installProcessGuards(log);
 
-server.listen(config.PORT, config.HOST, () => {
+server.listen(config.PORT, config.HOST, async () => {
   printStartupBanner({
     title: `🛸  AUTOCLAW GATEWAY PROXY (Anthropic Format v${VERSION})`,
     rows: [
@@ -522,7 +535,7 @@ server.listen(config.PORT, config.HOST, () => {
   });
 
   try {
-    getToken();
+    await getToken();
     console.log("  ✅  Token loaded - ready\n");
   } catch (e) {
     console.warn(`  ⚠️   ${e.message}\n`);

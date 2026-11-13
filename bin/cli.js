@@ -320,7 +320,7 @@ async function runDoctor() {
     const governor = getPacingGovernor(
       config,
       { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-      { getToken: () => jwt },
+      { getToken: () => jwt, peekToken: () => jwt },
     );
     const info = governor.accountInfo();
 

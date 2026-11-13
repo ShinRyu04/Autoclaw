@@ -41,6 +41,7 @@ import { createAuth } from "./lib/auth.js";
 import { createMetrics } from "./lib/metrics.js";
 import { makeStatusHandler, makeStatsHandler } from "./lib/status.js";
 import { reloadConfig } from "./lib/reload.js";
+import { isDeathBody, maybeFailover } from "./lib/failover.js";
 
 // Config
 const config = loadConfig({ format: "openai" });
@@ -54,6 +55,9 @@ const getToken = config.BACKEND === "zai"
       return config.ZAI_API_KEY;
     }
   : tokenLayer.getToken;
+const peekToken = config.BACKEND === "zai"
+  ? () => config.ZAI_API_KEY || null
+  : tokenLayer.peekToken;
 const auth = createAuth(config, log);
 const metrics = createMetrics();
 globalInFlightQueue.configure({ maxDepth: config.QUEUE_MAX_DEPTH, waitTimeoutMs: config.QUEUE_WAIT_MS });
@@ -88,7 +92,7 @@ installShutdownHooks(config, log);
 // AutoClaw account, keyed on the JWT's `user_id`. It sits between request
 // normalization and the transport on purpose — a request it refuses never
 // opens an upstream socket, which is the promise p7 proves by counting hits.
-const governor = getPacingGovernor(config, log, { getToken });
+const governor = getPacingGovernor(config, log, { getToken, peekToken });
 
 // Companion traffic (Requirement 5). The real app does not only send
 // completions — it polls its own model config every 300 s, and a proxy that
@@ -427,6 +431,15 @@ async function handleChatCompletions(req, res) {
     // request picks up the fresh JWT regardless of who serves this one.
     if (effectiveStatus === 401) invalidateAuth();
 
+    // Account death (upstream ban 410004 / session death 410000): switch to
+    // the healthiest managed account now so the NEXT request does not fail
+    // the same way. Fires only on these body codes — never on refresh
+    // hiccups, throttles, or any other upstream error.
+    if (isDeathBody(effectiveStatus, upstreamErrBody)) {
+      const switched = await maybeFailover("upstream-ban", log, { currentToken: peekToken?.() ?? null });
+      if (switched) invalidateAuth();
+    }
+
     // Classify BEFORE deciding, and decide the fallback on the CLASSIFIED status
     // rather than the raw one. A raw 403 that means "free-tier capacity throttle"
     // (810002 pay-view) classifies to 429, and 429 is terminal for the fallback —
@@ -496,7 +509,7 @@ const server = createGatewayServer({
 
 installProcessGuards(log);
 
-server.listen(config.PORT, config.HOST, () => {
+server.listen(config.PORT, config.HOST, async () => {
   printStartupBanner({
     title: `🛸  AUTOCLAW GATEWAY PROXY (OpenAI Format v${VERSION})`,
     rows: [
@@ -518,7 +531,7 @@ server.listen(config.PORT, config.HOST, () => {
   });
 
   try {
-    getToken();
+    await getToken();
     console.log("  ✅  Token loaded — ready\n");
   } catch (e) {
     console.warn(`  ⚠️   ${e.message}\n`);
