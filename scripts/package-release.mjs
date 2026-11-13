@@ -70,27 +70,24 @@ function node(args) {
   execFileSync(process.execPath, args, { stdio: "inherit", cwd: root });
 }
 
-function tool(pkgName, binPath, binArgs) {
-  node([join(root, "node_modules", pkgName, binPath), ...binArgs]);
-}
-
 const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 
-function buildSeaBinary(role, entryFile) {
+async function buildSeaBinary(role, entryFile) {
+  const { build } = await import("esbuild");
   const entry = join(buildDir, `entry-${role}.js`);
   writeFileSync(entry, `import "./compiled-env.js";\nimport ${JSON.stringify(entryFile)};\n`);
 
   const bundle = join(buildDir, `${role}.cjs`);
-  tool("esbuild", join("bin", "esbuild"), [
-    entry,
-    "--bundle",
-    "--platform=node",
-    "--format=cjs",
-    "--target=node22",
-    "--log-level=warning",
-    `--define:import.meta.url="file:///"`,
-    `--outfile=${bundle}`,
-  ]);
+  await build({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node22",
+    logLevel: "warning",
+    define: { "import.meta.url": '"file:///"' },
+    outfile: bundle,
+  });
 
   const seaConfig = join(buildDir, `sea-${role}.json`);
   const blob = join(buildDir, `${role}.blob`);
@@ -107,9 +104,19 @@ function buildSeaBinary(role, entryFile) {
   copyFileSync(process.execPath, binary);
   if (platform !== "windows") chmodSync(binary, 0o755);
 
+  if (platform === "darwin") {
+    // A signed Mach-O cannot take the injected blob; strip, inject, re-sign
+    // ad hoc so arm64 macOS still executes it.
+    try { execFileSync("codesign", ["--remove-signature", binary], { stdio: "inherit" }); } catch { /* unsigned already */ }
+  }
+
   const inject = [join(root, "node_modules", "postject", "dist", "cli.js"), binary, "NODE_SEA_BLOB", blob, "--sentinel-fuse", SEA_FUSE];
   if (platform === "darwin") inject.push("--macho-segment-name", "NODE_SEA");
   node(inject);
+
+  if (platform === "darwin") {
+    execFileSync("codesign", ["--sign", "-", binary], { stdio: "inherit" });
+  }
   return binary;
 }
 
@@ -129,9 +136,9 @@ if (!process.env.GLMP_KEYS_FILE) process.env.GLMP_KEYS_FILE = path.join(process.
 `,
   );
 
-  buildSeaBinary("openai", "../../openai.js");
-  buildSeaBinary("anthropic", "../../anthropic.js");
-  buildSeaBinary("dashboard", "../../dashboard/server.js");
+  await buildSeaBinary("openai", "../../openai.js");
+  await buildSeaBinary("anthropic", "../../anthropic.js");
+  await buildSeaBinary("dashboard", "../../dashboard/server.js");
 
   if (platform === "windows") {
     writeFileSync(
